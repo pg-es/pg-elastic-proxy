@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 #MISE description="Build all Go packages"
+set -euo pipefail
 exec go build ./...

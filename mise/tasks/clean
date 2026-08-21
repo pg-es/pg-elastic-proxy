@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 #MISE description="Remove build artifacts"
+set -euo pipefail
 exec go clean ./...
