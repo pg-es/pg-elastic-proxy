@@ -6,8 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/asp437/pg_elastic/db"
-	"github.com/asp437/pg_elastic/utils"
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/utils"
 	"gopkg.in/olivere/elastic.v5"
 	"log"
 )

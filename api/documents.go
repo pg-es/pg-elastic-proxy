@@ -2,10 +2,10 @@ package api
 
 import (
 	"encoding/json"
-	"github.com/asp437/pg_elastic/api/search"
-	"github.com/asp437/pg_elastic/db"
-	"github.com/asp437/pg_elastic/server"
-	"github.com/asp437/pg_elastic/utils"
+	"github.com/pg-es/pg-es-proxy/api/search"
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/server"
+	"github.com/pg-es/pg-es-proxy/utils"
 	"io/ioutil"
 	"net/http"
 	"regexp"

@@ -2,8 +2,8 @@ package search
 
 import (
 	"fmt"
-	"github.com/asp437/pg_elastic/db"
-	"github.com/asp437/pg_elastic/utils"
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 // ParseSearchQuery parses a query and convert it into db.Query

@@ -2,7 +2,7 @@ package db
 
 import (
 	"fmt"
-	"github.com/asp437/pg_elastic/utils"
+	"github.com/pg-es/pg-es-proxy/utils"
 	"github.com/go-pg/pg"
 	"github.com/go-pg/pg/orm"
 	"strings"
