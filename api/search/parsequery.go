@@ -48,7 +48,7 @@ func parseMatchPhraseQuery(rawQuery map[string]interface{}, query *db.Query, map
 					operator = vv.(string)
 				}
 			}
-			operator = operator // Silent not used variable
+			_ = operator
 			fieldMapping, ok := utils.GetFieldMapping(mapping, fieldName)
 			if ok && len(fieldMapping.Analyzer) > 0 {
 				whereClause = fmt.Sprintf("to_tsvector('%s', document->'%s') @@ phraseto_tsquery('%s', '%s')", fieldMapping.Analyzer, fieldName, fieldMapping.Analyzer, queryString)
@@ -83,7 +83,7 @@ func parseMatchQuery(rawQuery map[string]interface{}, query *db.Query, mapping m
 					operator = vv.(string)
 				}
 			}
-			operator = operator // Silent not used variable
+			_ = operator
 			fieldMapping, ok := utils.GetFieldMapping(mapping, fieldName)
 			if ok && len(fieldMapping.Analyzer) > 0 {
 				whereClause = fmt.Sprintf("to_tsvector('%s', document->'%s') @@ to_tsquery('%s', '%s')", fieldMapping.Analyzer, fieldName, fieldMapping.Analyzer, queryString)
