@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Build all Go packages"
+#MISE description="Build pg-es-proxy"
 set -euo pipefail
-exec go build ./...
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+exec go build -ldflags "-X github.com/pg-es/pg-es-proxy/internal/version.Version=${VERSION}" ./cmd/pg-es-proxy
