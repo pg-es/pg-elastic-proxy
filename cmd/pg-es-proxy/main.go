@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/asp437/pg_elastic/internal/server"
 	"log"
+
+	"github.com/pg-es/pg-es-proxy/internal/server"
 )
 
 func main() {

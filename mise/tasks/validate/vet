@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Run go vet on all packages"
+set -euo pipefail
+exec go vet ./...

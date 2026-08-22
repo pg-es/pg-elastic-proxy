@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/asp437/pg_elastic/server"
+	"github.com/pg-es/pg-es-proxy/server"
 	"net/http"
 )
 

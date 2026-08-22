@@ -2,10 +2,10 @@ package server
 
 import (
 	"errors"
-	"github.com/asp437/pg_elastic/api"
-	"github.com/asp437/pg_elastic/db"
-	"github.com/asp437/pg_elastic/server"
-	"github.com/asp437/pg_elastic/utils"
+	"github.com/pg-es/pg-es-proxy/api"
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/server"
+	"github.com/pg-es/pg-es-proxy/utils"
 	"log"
 	"net/http"
 	"regexp"
