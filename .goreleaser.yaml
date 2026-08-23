@@ -1,0 +1,65 @@
+version: 2
+
+project_name: pg-es-proxy
+
+env:
+  - CGO_ENABLED=0
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next+{{ .ShortCommit }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+
+release:
+  prerelease: auto
+  draft: false
+  github:
+    owner: pg-es
+    name: pg-elastic-proxy
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+builds:
+  - id: pg-es-proxy
+    main: ./cmd/pg-es-proxy
+    binary: pg-es-proxy
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X 'github.com/pg-es/pg-es-proxy/internal/version.Version={{.Version}}'
+      - -X 'github.com/pg-es/pg-es-proxy/internal/version.GitCommit={{.ShortCommit}}'
+      - -X 'github.com/pg-es/pg-es-proxy/internal/version.BuildMeta={{.Timestamp}}'
+
+dockers_v2:
+  - ids:
+      - pg-es-proxy
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - ghcr.io/pg-es/pg-es-proxy
+    tags:
+      - "{{ .Tag }}"
+      - "v{{ .Major }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    annotations:
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.name": "{{ .ProjectName }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.source": "{{ .GitURL }}"
