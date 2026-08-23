@@ -2,9 +2,9 @@ package db
 
 import (
 	"fmt"
-	"github.com/pg-es/pg-es-proxy/utils"
 	"github.com/go-pg/pg"
 	"github.com/go-pg/pg/orm"
+	"github.com/pg-es/pg-es-proxy/utils"
 	"strings"
 )
 
@@ -112,7 +112,9 @@ func (dbc *Client) CreateIndex(indexName, options string) (*IndexRecord, error) 
 	} else {
 		return nil, utils.NewIllegalQueryError("Index already exists")
 	}
-	indexSelectQuery.Select(&indexRecord)
+	if err = indexSelectQuery.Select(&indexRecord); err != nil {
+		return nil, utils.NewDBQueryError(err.Error())
+	}
 	return &indexRecord, nil
 }
 
@@ -127,8 +129,7 @@ func (dbc *Client) GetIndex(indexName string) (*IndexRecord, error) {
 	if count == 0 {
 		return nil, nil
 	}
-	indexSelectQuery.Select(&indexRecord)
-	if err != nil {
+	if err = indexSelectQuery.Select(&indexRecord); err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
@@ -139,8 +140,8 @@ func (dbc *Client) GetIndex(indexName string) (*IndexRecord, error) {
 func (dbc *Client) FindIndices(indexPattern string) ([]string, error) {
 	var records []IndexRecord
 	var results []string
-	indexPattern = strings.Replace(indexPattern, "?", "_", -1)
-	indexPattern = strings.Replace(indexPattern, "*", "%", -1)
+	indexPattern = strings.ReplaceAll(indexPattern, "?", "_")
+	indexPattern = strings.ReplaceAll(indexPattern, "*", "%")
 	query := dbc.connection.Model(&IndexRecord{}).Where("name LIKE ?", indexPattern)
 	err := query.Select(&records)
 	if err != nil {
@@ -212,8 +213,8 @@ func (dbc *Client) UpdateTypeOptions(indexName, typeName, options string) (*Type
 func (dbc *Client) FindTypes(index, typePattern string) ([]string, error) {
 	var records []TypeRecord
 	var results []string
-	typePattern = strings.Replace(typePattern, "?", "_", -1)
-	typePattern = strings.Replace(typePattern, "*", "%", -1)
+	typePattern = strings.ReplaceAll(typePattern, "?", "_")
+	typePattern = strings.ReplaceAll(typePattern, "*", "%")
 	query := dbc.connection.Model(&TypeRecord{}).Where("name LIKE ?", typePattern).Where("index_name = ?", index)
 	err := query.Select(&records)
 	if err != nil {
@@ -257,15 +258,15 @@ func (dbc *Client) CreateDocument(indexName, typeName, document string, document
 			return nil, err
 		}
 	} else {
-		documentExist, err := dbc.IsDocumentExists(indexName, typeName, documentID)
+		var documentExist bool
+		documentExist, err = dbc.IsDocumentExists(indexName, typeName, documentID)
 		if err != nil {
 			return nil, err
 		}
 		if documentExist {
-			result, err = nil, utils.NewDBQueryError(fmt.Sprintf("Document with ID %s already exists", documentID))
-		} else {
-			result, err = dbc.insertDocumentID(indexName, typeName, document, documentID)
+			return nil, utils.NewDBQueryError(fmt.Sprintf("Document with ID %s already exists", documentID))
 		}
+		result, err = dbc.insertDocumentID(indexName, typeName, document, documentID)
 	}
 	return result, err
 }
@@ -319,6 +320,9 @@ func (dbc *Client) UpdateDocument(indexName, typeName, document string, document
 			return nil, utils.NewDBQueryError(err.Error())
 		}
 		result, err = dbc.GetDocument(indexName, typeName, documentID)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		return nil, utils.NewDBQueryError(fmt.Sprintf("Document with ID %s doesn't exists", documentID))
 	}

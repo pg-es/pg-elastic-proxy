@@ -40,7 +40,7 @@ type ElasticHandler struct {
 func NewElasticHandler(s PGElasticServer) (result *ElasticHandler) {
 	result = new(ElasticHandler)
 	result.server = s
-	result.endpointPattern = regexp.MustCompile("/(?P<index>\\w+)/(?P<type>[^_]\\w+)/(?P<endpoint>.*)")
+	result.endpointPattern = regexp.MustCompile(`/(?P<index>\w+)/(?P<type>[^_]\w+)/(?P<endpoint>.*)`)
 	return result
 }
 
@@ -71,12 +71,12 @@ func (h *ElasticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Print message about unsupported /<index>/<type>/<endpoint> request
-		fmt.Fprintf(w, "Index: %s\n", indexName)
-		fmt.Fprintf(w, "Type: %s\n", typeName)
-		fmt.Fprintf(w, "Endpoint: <%s> not supported\n", endpoint)
+		fmt.Fprintf(w, "Index: %s\n", indexName)                   //nolint:errcheck // best-effort debug write to ResponseWriter
+		fmt.Fprintf(w, "Type: %s\n", typeName)                     //nolint:errcheck // best-effort debug write to ResponseWriter
+		fmt.Fprintf(w, "Endpoint: <%s> not supported\n", endpoint) //nolint:errcheck // best-effort debug write to ResponseWriter
 
 		w.WriteHeader(http.StatusNotFound)
-		r.Write(w)
+		r.Write(w) //nolint:errcheck // best-effort request dump to ResponseWriter
 	} else {
 		for _, route := range h.specialRoutes {
 			if route.pattern.MatchString(r.URL.Path) && supportMethod(r.Method, route.methods) {
@@ -88,7 +88,7 @@ func (h *ElasticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Print message about unsupported request
 		fmt.Println(r.URL)
 
-		r.Write(os.Stderr)
+		r.Write(os.Stderr) //nolint:errcheck // best-effort request dump to stderr
 		http.NotFound(w, r)
 	}
 }
@@ -105,7 +105,7 @@ func (h *ElasticHandler) writeOutput(w http.ResponseWriter, r *http.Request, out
 	if err != nil {
 		panic(err)
 	}
-	w.Write(b)
+	w.Write(b) //nolint:errcheck // best-effort JSON write to ResponseWriter
 }
 
 // Process output of request processing with respect to errors

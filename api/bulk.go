@@ -5,7 +5,7 @@ import (
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/server"
 	"github.com/pg-es/pg-es-proxy/utils"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -42,7 +42,7 @@ type bulkDeleteResponse struct {
 
 // BulkHandler handles ElasticSearch bulk requests
 func BulkHandler(endpoint string, r *http.Request, server server.PGElasticServer) (response interface{}, err error) {
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
@@ -86,9 +86,8 @@ func ProcessBulkQuery(rawQuery []string, server server.PGElasticServer) (interfa
 
 			switch k {
 			case "index":
-				typeNames, err := server.GetDBClient().FindTypes(indexName, typeName)
-				var documentObject *db.ElasticSearchDocument
-				documentObject = nil
+				var typeNames []string
+				typeNames, err = server.GetDBClient().FindTypes(indexName, typeName)
 				if err != nil {
 					response.Errors = true
 					return nil, err

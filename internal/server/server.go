@@ -27,7 +27,7 @@ func InitializeServer(configFileName string) (server.PGElasticServer, error) {
 	s.dbclient = db.CreateClient(s.config.PostgresConfig)
 
 	if s.dbclient == nil {
-		return nil, errors.New("Database connection is not established")
+		return nil, errors.New("database connection is not established")
 	}
 	err := s.dbclient.InitializeSchema()
 	if err != nil {
@@ -50,7 +50,7 @@ func (s *PGElasticServerProto) GetDBClient() *db.Client {
 // Start the server
 func (s *PGElasticServerProto) Start() {
 	log.Printf("starting server, listening on port %d\n", s.config.ServerPort)
-	http.ListenAndServe(":"+strconv.Itoa(s.config.ServerPort), s.handler)
+	log.Fatal(http.ListenAndServe(":"+strconv.Itoa(s.config.ServerPort), s.handler))
 }
 
 // Configuration of all handlers of the server
@@ -58,15 +58,15 @@ func (s *PGElasticServerProto) configureHandler() {
 	s.handler.HandleFunc(regexp.MustCompile("^/_cluster/health"), api.HealthHandler, []string{"GET"})
 	s.handler.HandleFunc(regexp.MustCompile("^/_bulk"), api.BulkHandler, []string{"POST"})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*/_mapping/[\\d\\w]+"), api.PutTypeMapping, []string{"PUT"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_][\d\w]*/_mapping/[\d\w]+`), api.PutTypeMapping, []string{"PUT"})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*"), api.PutIndexHandler, []string{"PUT"})
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*"), api.HeadIndexHandler, []string{"HEAD"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_][\d\w]*`), api.PutIndexHandler, []string{"PUT"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_][\d\w]*`), api.HeadIndexHandler, []string{"HEAD"})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*/_search"), api.FindIndexDocumentHandler, []string{"GET"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_][\d\w]*/_search`), api.FindIndexDocumentHandler, []string{"GET"})
 	s.handler.HandleFuncEndpoint(regexp.MustCompile("^_search"), api.FindDocumentHandler, []string{"GET"})
 
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]*"), api.PutDocumentHandler, []string{"PUT", "POST"})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]+"), api.GetDocumentHandler, []string{"GET"})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]+"), api.DeleteDocumentHandler, []string{"DELETE"})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^[\d\w]*`), api.PutDocumentHandler, []string{"PUT", "POST"})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^[\d\w]+`), api.GetDocumentHandler, []string{"GET"})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^[\d\w]+`), api.DeleteDocumentHandler, []string{"DELETE"})
 }

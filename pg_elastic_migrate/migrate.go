@@ -81,7 +81,7 @@ func main() {
 	}
 	postgresqlClient := db.CreateClient(postgresConfig)
 	if postgresqlClient == nil {
-		log.Fatal(errors.New("Database connection is not established"))
+		log.Fatal(errors.New("database connection is not established"))
 	}
 	err = postgresqlClient.InitializeSchema()
 	if err != nil {

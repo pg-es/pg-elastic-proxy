@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/pg-es/pg-es-proxy/server"
 	"github.com/pg-es/pg-es-proxy/utils"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"regexp"
 )
@@ -18,13 +18,13 @@ type typePutResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
-var putTypeMappingPattern = regexp.MustCompile("/(?P<index>\\w+)/_mapping/(?P<type>\\w+)")
-var indexHandlerPattern = regexp.MustCompile("/(?P<index>\\w+)")
+var putTypeMappingPattern = regexp.MustCompile(`/(?P<index>\w+)/_mapping/(?P<type>\w+)`)
+var indexHandlerPattern = regexp.MustCompile(`/(?P<index>\w+)`)
 
 // PutIndexHandler process a response to put a new index into database
 func PutIndexHandler(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
-	optionsBytes, err := ioutil.ReadAll(r.Body)
+	optionsBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
@@ -53,7 +53,7 @@ func HeadIndexHandler(endpoint string, r *http.Request, server server.PGElasticS
 func PutTypeMapping(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
 	indexName := putTypeMappingPattern.ReplaceAllString(endpoint, "${index}")
 	typeName := putTypeMappingPattern.ReplaceAllString(endpoint, "${type}")
-	optionsBytes, err := ioutil.ReadAll(r.Body)
+	optionsBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}

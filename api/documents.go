@@ -6,7 +6,7 @@ import (
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/server"
 	"github.com/pg-es/pg-es-proxy/utils"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -72,7 +72,7 @@ func formatDocumentSearchResponse(index, typeName string, doc db.ElasticSearchDo
 // PutDocumentHandler handles request to put document into storage
 func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, s server.PGElasticServer) (interface{}, error) {
 	var documentObject *db.ElasticSearchDocument
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
@@ -177,7 +177,7 @@ func FindDocumentHandler(indexPattern, typePattern, endpoint string, r *http.Req
 	if err != nil {
 		return nil, utils.NewInternalError(err.Error())
 	}
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
@@ -203,7 +203,9 @@ func FindDocumentHandler(indexPattern, typePattern, endpoint string, r *http.Req
 					if err != nil {
 						return nil, err
 					}
-					json.Unmarshal([]byte(docType.Options), &typeMapping)
+					if err := json.Unmarshal([]byte(docType.Options), &typeMapping); err != nil {
+						return nil, err
+					}
 
 					query := s.GetDBClient().NewQuery(index, typeName)
 					search.ParseSearchQuery(v.(map[string]interface{}), query, typeMapping)
@@ -240,7 +242,7 @@ func FindDocumentHandler(indexPattern, typePattern, endpoint string, r *http.Req
 
 // FindIndexDocumentHandler handles request to find document of any type on storage
 func FindIndexDocumentHandler(endpoint string, r *http.Request, s server.PGElasticServer) (response interface{}, err error) {
-	var indexHandlerPattern = regexp.MustCompile("^/(?P<index>\\w+)/_search")
+	var indexHandlerPattern = regexp.MustCompile(`^/(?P<index>\w+)/_search`)
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
 	return FindDocumentHandler(indexName, "*", endpoint, r, s)
 }
