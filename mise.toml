@@ -1,6 +1,7 @@
 [tools]
 go = "1.27.0"
 "go:golang.org/x/tools/gopls" = "latest"
+"go:golang.org/x/tools/cmd/deadcode" = "latest"
 golangci-lint = "2.13.1"
 prek = "latest"
 goreleaser = "latest"

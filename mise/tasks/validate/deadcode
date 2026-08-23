@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Check for dead code reachable from main entry points"
+set -euo pipefail
+exec deadcode ./cmd/...
