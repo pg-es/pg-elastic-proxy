@@ -3,9 +3,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/pg-es/pg-es-proxy/api"
@@ -110,6 +109,10 @@ func wrapDocumentHandler(
 	}
 }
 
+type errorBody struct {
+	Error string `json:"error"`
+}
+
 // processResponse handles the output of a handler invocation, formatting
 // [utils.ElasticError] values as JSON error bodies.
 func processResponse(w http.ResponseWriter, r *http.Request, output any, err error) {
@@ -119,9 +122,8 @@ func processResponse(w http.ResponseWriter, r *http.Request, output any, err err
 		if elasticErr, ok := errors.AsType[utils.ElasticError](err); ok {
 			output = elasticErr.FormatErrorResponse()
 		} else {
-			fmt.Fprintf(os.Stderr, "internal error: %v\n", err)
-
-			_, _ = w.Write([]byte(`{"error":"internal server error"}`))
+			log.Printf("internal error: %v", err)
+			writeJSON(w, r, errorBody{Error: "internal server error"})
 
 			return
 		}
@@ -146,9 +148,10 @@ func writeJSON(w http.ResponseWriter, r *http.Request, output any) {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "json marshal error: %v\n", err)
+		log.Printf("json marshal error: %v", err)
 
-		_, _ = w.Write([]byte(`{"error":"response serialization failed"}`))
+		fallback, _ := json.Marshal(errorBody{Error: "response serialization failed"})
+		_, _ = w.Write(fallback)
 
 		return
 	}
