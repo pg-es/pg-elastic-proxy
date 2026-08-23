@@ -83,7 +83,7 @@ func TestNewRouter(t *testing.T) {
 	mux := server.NewRouter(&mockServer{})
 
 	tests := []routeTestCase{
-		// System routes — work without DB.
+		// System routes: work without DB.
 		{
 			name:       "cluster health",
 			method:     http.MethodGet,
@@ -99,13 +99,13 @@ func TestNewRouter(t *testing.T) {
 			wantBody:   "took",
 		},
 
-		// Index routes — nil-DB panic proves correct dispatch.
+		// Index routes: nil-DB panic proves correct dispatch.
 		{name: "put type mapping", method: http.MethodPut, path: "/idx/_mapping/mytype", wantPanic: true},
 		{name: "put index", method: http.MethodPut, path: "/testidx", wantPanic: true},
 		{name: "head index", method: http.MethodHead, path: "/testidx2", wantPanic: true},
 		{name: "index search", method: http.MethodGet, path: "/idx/_search", wantPanic: true},
 
-		// Type+endpoint routes — nil-DB panic proves correct dispatch.
+		// Type+endpoint routes: nil-DB panic proves correct dispatch.
 		{name: "type search", method: http.MethodGet, path: "/idx/tp/_search", wantPanic: true},
 		{name: "put document", method: http.MethodPut, path: "/idx/tp/putdoc", wantPanic: true},
 		{name: "post document", method: http.MethodPost, path: "/idx/tp/postdoc", wantPanic: true},

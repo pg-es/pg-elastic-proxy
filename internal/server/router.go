@@ -17,17 +17,17 @@ import (
 func NewRouter(srv server.PGElasticServer) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// System routes — fixed paths, no index validation needed.
+	// System routes: fixed paths, no index validation needed.
 	mux.HandleFunc("GET /_cluster/health", wrapRequestHandler(api.HealthHandler, srv))
 	mux.HandleFunc("POST /_bulk", wrapRequestHandler(api.BulkHandler, srv))
 
-	// Index-level routes — index must not start with "_".
+	// Index-level routes: index must not start with "_".
 	mux.HandleFunc("PUT /{index}/_mapping/{type}", wrapIndexRequestHandler(api.PutTypeMapping, srv))
 	mux.HandleFunc("GET /{index}/_search", wrapIndexRequestHandler(api.FindIndexDocumentHandler, srv))
 	mux.HandleFunc("PUT /{index}", wrapIndexRequestHandler(api.PutIndexHandler, srv))
 	mux.HandleFunc("HEAD /{index}", wrapIndexRequestHandler(api.HeadIndexHandler, srv))
 
-	// Type+endpoint routes — both index and type must not start with "_".
+	// Type+endpoint routes: both index and type must not start with "_".
 	mux.HandleFunc("GET /{index}/{type}/_search", wrapTypeSearchHandler(api.FindDocumentHandler, srv))
 	mux.HandleFunc("PUT /{index}/{type}/{id}", wrapDocumentHandler(api.PutDocumentHandler, srv))
 	mux.HandleFunc("POST /{index}/{type}/{id}", wrapDocumentHandler(api.PutDocumentHandler, srv))
