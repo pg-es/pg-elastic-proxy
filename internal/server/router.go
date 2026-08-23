@@ -17,19 +17,19 @@ import (
 func NewRouter(srv server.PGElasticServer) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /_cluster/health", wrapRequestHandler(api.HealthHandler, srv))
-	mux.HandleFunc("POST /_bulk", wrapRequestHandler(api.BulkHandler, srv))
+	mux.HandleFunc("GET /_cluster/health", handle(api.HealthHandler, srv))
+	mux.HandleFunc("POST /_bulk", handle(api.BulkHandler, srv))
 
-	mux.HandleFunc("PUT /{index}/_mapping/{type}", wrapIndexRequestHandler(api.PutTypeMapping, srv))
-	mux.HandleFunc("GET /{index}/_search", wrapIndexRequestHandler(api.FindIndexDocumentHandler, srv))
-	mux.HandleFunc("PUT /{index}", wrapIndexRequestHandler(api.PutIndexHandler, srv))
-	mux.HandleFunc("HEAD /{index}", wrapIndexRequestHandler(api.HeadIndexHandler, srv))
+	mux.HandleFunc("PUT /{index}/_mapping/{type}", handle(api.PutTypeMapping, srv, "index"))
+	mux.HandleFunc("GET /{index}/_search", handle(api.FindIndexDocumentHandler, srv, "index"))
+	mux.HandleFunc("PUT /{index}", handle(api.PutIndexHandler, srv, "index"))
+	mux.HandleFunc("HEAD /{index}", handle(api.HeadIndexHandler, srv, "index"))
 
-	mux.HandleFunc("GET /{index}/{type}/_search", wrapTypeSearchHandler(api.FindDocumentHandler, srv))
-	mux.HandleFunc("PUT /{index}/{type}/{id}", wrapDocumentHandler(api.PutDocumentHandler, srv))
-	mux.HandleFunc("POST /{index}/{type}/{id}", wrapDocumentHandler(api.PutDocumentHandler, srv))
-	mux.HandleFunc("GET /{index}/{type}/{id}", wrapDocumentHandler(api.GetDocumentHandler, srv))
-	mux.HandleFunc("DELETE /{index}/{type}/{id}", wrapDocumentHandler(api.DeleteDocumentHandler, srv))
+	mux.HandleFunc("GET /{index}/{type}/_search", handle(api.FindDocumentHandler, srv, "index", "type"))
+	mux.HandleFunc("PUT /{index}/{type}/{id}", handle(api.PutDocumentHandler, srv, "index", "type"))
+	mux.HandleFunc("POST /{index}/{type}/{id}", handle(api.PutDocumentHandler, srv, "index", "type"))
+	mux.HandleFunc("GET /{index}/{type}/{id}", handle(api.GetDocumentHandler, srv, "index", "type"))
+	mux.HandleFunc("DELETE /{index}/{type}/{id}", handle(api.DeleteDocumentHandler, srv, "index", "type"))
 
 	return mux
 }
@@ -39,72 +39,18 @@ func validName(name string) bool {
 	return name != "" && !strings.HasPrefix(name, "_")
 }
 
-// wrapRequestHandler adapts an [server.ElasticRequestHandler] to [http.HandlerFunc].
-// The handler receives r.URL.Path as its path argument.
-func wrapRequestHandler(handler server.ElasticRequestHandler, srv server.PGElasticServer) http.HandlerFunc {
+func handle(handler server.Handler, srv server.PGElasticServer, validateParams ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		output, err := handler(r.URL.Path, r, srv)
-		processResponse(w, r, output, err)
-	}
-}
-
-// wrapIndexRequestHandler adapts an [server.ElasticRequestHandler] for routes
-// containing an {index} path parameter
-func wrapIndexRequestHandler(handler server.ElasticRequestHandler, srv server.PGElasticServer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !validName(r.PathValue("index")) {
-			http.NotFound(w, r)
-			return
+		for _, param := range validateParams {
+			if !validName(r.PathValue(param)) {
+				http.NotFound(w, r)
+				return
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 
-		output, err := handler(r.URL.Path, r, srv)
-		processResponse(w, r, output, err)
-	}
-}
-
-// wrapTypeSearchHandler adapts [api.FindDocumentHandler] for GET /{index}/{type}/_search.
-func wrapTypeSearchHandler(
-	handler server.ElasticEndpointRequestHandler, srv server.PGElasticServer,
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		index := r.PathValue("index")
-		typeName := r.PathValue("type")
-
-		if !validName(index) || !validName(typeName) {
-			http.NotFound(w, r)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		output, err := handler(index, typeName, "_search", r, srv)
-		processResponse(w, r, output, err)
-	}
-}
-
-// wrapDocumentHandler adapts an [server.ElasticEndpointRequestHandler] for
-// document CRUD routes (/{index}/{type}/{id}).
-func wrapDocumentHandler(
-	handler server.ElasticEndpointRequestHandler, srv server.PGElasticServer,
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		index := r.PathValue("index")
-		typeName := r.PathValue("type")
-
-		if !validName(index) || !validName(typeName) {
-			http.NotFound(w, r)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		endpoint := r.PathValue("id")
-
-		output, err := handler(index, typeName, endpoint, r, srv)
+		output, err := handler(r, srv)
 		processResponse(w, r, output, err)
 	}
 }

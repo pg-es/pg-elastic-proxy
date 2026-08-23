@@ -32,7 +32,7 @@ type bulkGetCommandResponse struct {
 }
 
 // BulkHandler handles ElasticSearch bulk requests.
-func BulkHandler(_ string, r *http.Request, srv server.PGElasticServer) (response any, err error) {
+func BulkHandler(r *http.Request, srv server.PGElasticServer) (response any, err error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
