@@ -42,7 +42,7 @@ func InitializeServer(configFileName string) (server.PGElasticServer, error) {
 		return nil, err
 	}
 
-	srv.handler = NewRouter(srv)
+	srv.handler = ElasticProductMiddleware(NewRouter(srv))
 
 	return srv, nil
 }
