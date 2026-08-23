@@ -41,6 +41,14 @@ func validName(name string) bool {
 
 func handle(handler server.Handler, srv server.PGElasticServer, validateParams ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("handler panic: %v", rv)
+				w.WriteHeader(http.StatusInternalServerError)
+				writeJSON(w, r, errorBody{Error: "internal server error"})
+			}
+		}()
+
 		for _, param := range validateParams {
 			if !validName(r.PathValue(param)) {
 				http.NotFound(w, r)
