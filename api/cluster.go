@@ -6,7 +6,7 @@ import (
 	"github.com/pg-es/pg-es-proxy/server"
 )
 
-// ClusterHealth describes JSON schema for _cluster/health requests
+// clusterHealth describes JSON schema for _cluster/health requests.
 type clusterHealth struct {
 	Name                        string  `json:"cluster_name"`
 	Status                      string  `json:"status"`
@@ -24,11 +24,12 @@ type clusterHealth struct {
 	ActiveShardsPercent         float32 `json:"active_shards_percent_as_number"`
 }
 
-// HealthHandler process a health-check response
+// HealthHandler processes a health-check response.
 func HealthHandler(_ string, _ *http.Request, _ server.PGElasticServer) (any, error) {
 	health := clusterHealth{}
 	health.Name = "pg_elastic_cluster"
 	health.Status = "yellow"
 	health.NumberOfNodes = 1
+
 	return health, nil
 }

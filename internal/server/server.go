@@ -14,55 +14,68 @@ import (
 	"github.com/pg-es/pg-es-proxy/utils"
 )
 
-// PGElasticServerProto describes a server runtime instance and its configuration
+const (
+	readTimeout  = 10 * time.Second
+	writeTimeout = 30 * time.Second
+	idleTimeout  = 60 * time.Second
+)
+
+var errDBNotConnected = errors.New("database connection is not established")
+
+// PGElasticServerProto describes a server runtime instance and its configuration.
 type PGElasticServerProto struct {
 	handler  *server.ElasticHandler
 	config   *utils.PGElasticConfig
 	dbclient *db.Client
 }
 
-// InitializeServer creates an instance of server. Configuration should be loaded from file configFileName
+// InitializeServer creates an instance of server. Configuration should be loaded from file configFileName.
 func InitializeServer(configFileName string) (server.PGElasticServer, error) {
-	s := new(PGElasticServerProto)
-	s.config = utils.ReadConfig(configFileName)
-	s.handler = server.NewElasticHandler(s)
-	s.dbclient = db.CreateClient(s.config.PostgresConfig)
+	srv := new(PGElasticServerProto)
+	srv.config = utils.ReadConfig(configFileName)
+	srv.handler = server.NewElasticHandler(srv)
+	srv.dbclient = db.CreateClient(srv.config.PostgresConfig)
 
-	if s.dbclient == nil {
-		return nil, errors.New("database connection is not established")
+	if srv.dbclient == nil {
+		return nil, errDBNotConnected
 	}
-	err := s.dbclient.InitializeSchema()
+
+	err := srv.dbclient.InitializeSchema()
 	if err != nil {
 		return nil, err
 	}
-	s.configureHandler()
-	return s, nil
+
+	srv.configureHandler()
+
+	return srv, nil
 }
 
-// GetConfiguration returnes a configuration of the server
+// GetConfiguration returnes a configuration of the server.
 func (s *PGElasticServerProto) GetConfiguration() utils.PGElasticConfig {
 	return *s.config
 }
 
-// GetDBClient returnes a DB client of the server
+// GetDBClient returnes a DB client of the server.
 func (s *PGElasticServerProto) GetDBClient() *db.Client {
 	return s.dbclient
 }
 
-// Start the server
+// Start the server.
 func (s *PGElasticServerProto) Start() {
 	log.Printf("starting server, listening on port %d\n", s.config.ServerPort)
+
 	srv := &http.Server{
 		Addr:         ":" + strconv.Itoa(s.config.ServerPort),
 		Handler:      s.handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
 	}
+
 	log.Fatal(srv.ListenAndServe())
 }
 
-// Configuration of all handlers of the server
+// configureHandler sets up all handlers of the server.
 func (s *PGElasticServerProto) configureHandler() {
 	s.handler.HandleFunc(regexp.MustCompile("^/_cluster/health"), api.HealthHandler, []string{http.MethodGet})
 	s.handler.HandleFunc(regexp.MustCompile("^/_bulk"), api.BulkHandler, []string{http.MethodPost})

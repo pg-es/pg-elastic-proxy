@@ -3,26 +3,52 @@ version: "2"
 linters:
   default: standard
   enable:
+    - asciicheck
+    - bidichk
     - bodyclose
+    - containedctx
     - copyloopvar
+    - cyclop
+    - dupl
+    - dupword
     - durationcheck
+    - embeddedstructfieldcheck
+    - err113
     - errorlint
+    - errname
     - exhaustive
     - exptostd
     - fatcontext
     - forcetypeassert
+    - funcorder
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
     - goconst
     - gocritic
     - gocyclo
+    - godoclint
+    - godot
     - gosec
+    - iface
+    - importas
     - intrange
+    - iotamixing
+    - lll
     - loggercheck
+    - makezero
+    - mirror
     - misspell
+    - mnd
     - modernize
+    - nakedret
     - nestif
     - nilerr
     - noctx
+    - noinlineerr
     - nolintlint
+    - paralleltest
     - perfsprint
     - prealloc
     - predeclared
@@ -32,27 +58,62 @@ linters:
     - rowserrcheck
     - sloglint
     - sqlclosecheck
+    - testifylint
+    - testpackage
+    - thelper
     - unconvert
     - unparam
+    - unqueryvet
     - unused
     - usestdlibvars
     - usetesting
+    - varnamelen
     - wastedassign
     - whitespace
     - wrapcheck
+    - wsl_v5
+    - zerologlint
   settings:
+    cyclop:
+      max-complexity: 15
+    dupl:
+      threshold: 150
+    funlen:
+      lines: 80
+      statements: 50
+    gocognit:
+      min-complexity: 20
     gocyclo:
       min-complexity: 15
     exhaustive:
       default-signifies-exhaustive: true
+    lll:
+      line-length: 160
+    mnd:
+      ignored-functions:
+        - strconv.FormatInt
+        - strconv.FormatUint
+        - strconv.FormatFloat
+        - strconv.ParseInt
+        - strconv.ParseUint
+        - strconv.ParseFloat
+    nakedret:
+      max-func-lines: 30
     nolintlint:
       require-specific: true
       require-explanation: true
     gocritic:
       enabled-tags:
         - diagnostic
+        - experimental
+        - opinionated
         - performance
         - style
+    varnamelen:
+      min-name-length: 2
+      ignore-decls:
+        - w http.ResponseWriter
+        - r *http.Request
     wrapcheck:
       ignore-package-globs:
         - github.com/pg-es/pg-es-proxy/*
@@ -83,4 +144,3 @@ formatters:
   enable:
     - gofumpt
     - goimports
-

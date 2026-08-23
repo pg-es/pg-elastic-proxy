@@ -1,4 +1,4 @@
 package version
 
 // Version is the application version, set at build time via ldflags.
-var Version = "dev"
+var Version = "dev" //nolint:gochecknoglobals // set via ldflags at build time

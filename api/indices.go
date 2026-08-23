@@ -24,13 +24,15 @@ var (
 	indexHandlerPattern   = regexp.MustCompile(`/(?P<index>\w+)`)
 )
 
-// PutIndexHandler process a response to put a new index into database
+// PutIndexHandler processes a response to put a new index into database.
 func PutIndexHandler(endpoint string, r *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
+
 	optionsBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
+
 	options := string(optionsBytes)
 
 	_, err = srv.GetDBClient().CreateIndex(indexName, options)
@@ -41,25 +43,29 @@ func PutIndexHandler(endpoint string, r *http.Request, srv server.PGElasticServe
 	return indexPutResponse{true, true}, nil
 }
 
-// HeadIndexHandler process a response to check is an index exists in database
+// HeadIndexHandler processes a response to check if an index exists in database.
 func HeadIndexHandler(endpoint string, _ *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
+
 	indexRecord, err := srv.GetDBClient().GetIndex(indexName)
 	if err != nil {
 		fmt.Println(err)
 		return false, err
 	}
+
 	return indexRecord != nil, nil
 }
 
-// PutTypeMapping process a response to put a type mapping into database
+// PutTypeMapping processes a response to put a type mapping into database.
 func PutTypeMapping(endpoint string, r *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := putTypeMappingPattern.ReplaceAllString(endpoint, "${index}")
 	typeName := putTypeMappingPattern.ReplaceAllString(endpoint, "${type}")
+
 	optionsBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
+
 	options := string(optionsBytes)
 
 	typeObject, err := srv.GetDBClient().GetType(indexName, typeName)
@@ -76,5 +82,6 @@ func PutTypeMapping(endpoint string, r *http.Request, srv server.PGElasticServer
 	if err != nil {
 		return nil, err
 	}
+
 	return typePutResponse{true}, nil
 }
