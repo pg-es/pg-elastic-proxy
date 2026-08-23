@@ -2,71 +2,93 @@ package server
 
 import (
 	"errors"
-	"github.com/pg-es/pg-es-proxy/api"
-	"github.com/pg-es/pg-es-proxy/db"
-	"github.com/pg-es/pg-es-proxy/server"
-	"github.com/pg-es/pg-es-proxy/utils"
 	"log"
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
+
+	"github.com/pg-es/pg-es-proxy/api"
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/server"
+	"github.com/pg-es/pg-es-proxy/utils"
 )
 
-// PGElasticServerProto describes a server runtime instance and its configuration
+const (
+	readTimeout  = 10 * time.Second
+	writeTimeout = 30 * time.Second
+	idleTimeout  = 60 * time.Second
+)
+
+var errDBNotConnected = errors.New("database connection is not established")
+
+// PGElasticServerProto describes a server runtime instance and its configuration.
 type PGElasticServerProto struct {
 	handler  *server.ElasticHandler
 	config   *utils.PGElasticConfig
 	dbclient *db.Client
 }
 
-// InitializeServer creates an instance of server. Configuration should be loaded from file configFileName
+// InitializeServer creates an instance of server. Configuration should be loaded from file configFileName.
 func InitializeServer(configFileName string) (server.PGElasticServer, error) {
-	s := new(PGElasticServerProto)
-	s.config = utils.ReadConfig(configFileName)
-	s.handler = server.NewElasticHandler(s)
-	s.dbclient = db.CreateClient(s.config.PostgresConfig)
+	srv := new(PGElasticServerProto)
+	srv.config = utils.ReadConfig(configFileName)
+	srv.handler = server.NewElasticHandler(srv)
+	srv.dbclient = db.CreateClient(srv.config.PostgresConfig)
 
-	if s.dbclient == nil {
-		return nil, errors.New("Database connection is not established")
+	if srv.dbclient == nil {
+		return nil, errDBNotConnected
 	}
-	err := s.dbclient.InitializeSchema()
+
+	err := srv.dbclient.InitializeSchema()
 	if err != nil {
 		return nil, err
 	}
-	s.configureHandler()
-	return s, nil
+
+	srv.configureHandler()
+
+	return srv, nil
 }
 
-// GetConfiguration returnes a configuration of the server
+// GetConfiguration returnes a configuration of the server.
 func (s *PGElasticServerProto) GetConfiguration() utils.PGElasticConfig {
 	return *s.config
 }
 
-// GetDBClient returnes a DB client of the server
+// GetDBClient returnes a DB client of the server.
 func (s *PGElasticServerProto) GetDBClient() *db.Client {
 	return s.dbclient
 }
 
-// Start the server
+// Start the server.
 func (s *PGElasticServerProto) Start() {
 	log.Printf("starting server, listening on port %d\n", s.config.ServerPort)
-	http.ListenAndServe(":"+strconv.Itoa(s.config.ServerPort), s.handler)
+
+	srv := &http.Server{
+		Addr:         ":" + strconv.Itoa(s.config.ServerPort),
+		Handler:      s.handler,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
+	}
+
+	log.Fatal(srv.ListenAndServe())
 }
 
-// Configuration of all handlers of the server
+// configureHandler sets up all handlers of the server.
 func (s *PGElasticServerProto) configureHandler() {
-	s.handler.HandleFunc(regexp.MustCompile("^/_cluster/health"), api.HealthHandler, []string{"GET"})
-	s.handler.HandleFunc(regexp.MustCompile("^/_bulk"), api.BulkHandler, []string{"POST"})
+	s.handler.HandleFunc(regexp.MustCompile("^/_cluster/health"), api.HealthHandler, []string{http.MethodGet})
+	s.handler.HandleFunc(regexp.MustCompile("^/_bulk"), api.BulkHandler, []string{http.MethodPost})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*/_mapping/[\\d\\w]+"), api.PutTypeMapping, []string{"PUT"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*/_mapping/\w+`), api.PutTypeMapping, []string{http.MethodPut})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*"), api.PutIndexHandler, []string{"PUT"})
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*"), api.HeadIndexHandler, []string{"HEAD"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*`), api.PutIndexHandler, []string{http.MethodPut})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*`), api.HeadIndexHandler, []string{http.MethodHead})
 
-	s.handler.HandleFunc(regexp.MustCompile("^/[^_][\\d\\w]*/_search"), api.FindIndexDocumentHandler, []string{"GET"})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^_search"), api.FindDocumentHandler, []string{"GET"})
+	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*/_search`), api.FindIndexDocumentHandler, []string{http.MethodGet})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile("^_search"), api.FindDocumentHandler, []string{http.MethodGet})
 
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]*"), api.PutDocumentHandler, []string{"PUT", "POST"})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]+"), api.GetDocumentHandler, []string{"GET"})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^[\\d\\w]+"), api.DeleteDocumentHandler, []string{"DELETE"})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w*`), api.PutDocumentHandler, []string{http.MethodPut, http.MethodPost})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w+`), api.GetDocumentHandler, []string{http.MethodGet})
+	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w+`), api.DeleteDocumentHandler, []string{http.MethodDelete})
 }

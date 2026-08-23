@@ -6,18 +6,23 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
+
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/utils"
 	"gopkg.in/olivere/elastic.v5"
-	"log"
 )
 
-func migrateMapping(postgresqlClient *db.Client, indexName string, typeName string, mapping map[string]interface{}) {
+var errDBNotConnected = errors.New("database connection is not established")
+
+func migrateMapping(postgresqlClient *db.Client, indexName, typeName string, mapping map[string]any) {
 	options, err := json.MarshalIndent(mapping, "", "  ")
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	fmt.Printf("Processing mapping for Index: %s, Type: %s\n", indexName, typeName)
+
 	_, err = postgresqlClient.CreateType(indexName, typeName, string(options))
 	if err != nil {
 		log.Fatal(err)
@@ -29,12 +34,24 @@ func migrateIndexMappings(elasticClient *elastic.Client, postgresqlClient *db.Cl
 	if err != nil {
 		log.Fatal(err)
 	}
-	for key, mapping := range mappings[indexName].(map[string]interface{})["mappings"].(map[string]interface{}) {
-		processedMapping := map[string]interface{}{
-			"mappings": map[string]interface{}{
+
+	indexData, ok := mappings[indexName].(map[string]any)
+	if !ok {
+		log.Fatalf("unexpected mapping format for index %s", indexName)
+	}
+
+	mappingsData, ok := indexData["mappings"].(map[string]any)
+	if !ok {
+		log.Fatalf("unexpected mappings format for index %s", indexName)
+	}
+
+	for key, mapping := range mappingsData {
+		processedMapping := map[string]any{
+			"mappings": map[string]any{
 				key: mapping,
 			},
 		}
+
 		migrateMapping(postgresqlClient, indexName, key, processedMapping)
 	}
 }
@@ -50,7 +67,9 @@ func migrateIndex(elasticClient *elastic.Client, postgresqlClient *db.Client, in
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		fmt.Printf("Processing record Index: %s, Type: %s, ID: %s\n", item.Index, item.Type, item.Id)
+
 		_, err = postgresqlClient.CreateDocument(item.Index, item.Type, string(body), item.Id)
 		if err != nil {
 			log.Fatal(err)
@@ -64,9 +83,10 @@ func main() {
 	postgresqlPassword := flag.String("postgresql-password", "", "Password for specified user on destanation PostgreSQL instance")
 	postgresqlDB := flag.String("postgresql-database", "postgres", "Name of destanation database inside target PostgreSQL instance")
 	elasticsearchHost := flag.String("elasticsearch-host", "localhost:9200", "Host and port of source ElasticSearch instance")
+
 	flag.Parse()
 
-	elasticURL := fmt.Sprintf("http://%s", *elasticsearchHost)
+	elasticURL := "http://" + *elasticsearchHost
 
 	elasticClient, err := elastic.NewClient(elastic.SetURL(elasticURL))
 	if err != nil {
@@ -79,10 +99,12 @@ func main() {
 		Password:      *postgresqlPassword,
 		DBName:        *postgresqlDB,
 	}
+
 	postgresqlClient := db.CreateClient(postgresConfig)
 	if postgresqlClient == nil {
-		log.Fatal(errors.New("Database connection is not established"))
+		log.Fatal(errDBNotConnected)
 	}
+
 	err = postgresqlClient.InitializeSchema()
 	if err != nil {
 		log.Fatal(err)

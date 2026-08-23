@@ -2,171 +2,238 @@ package api
 
 import (
 	"encoding/json"
-	"github.com/pg-es/pg-es-proxy/db"
-	"github.com/pg-es/pg-es-proxy/server"
-	"github.com/pg-es/pg-es-proxy/utils"
-	"io/ioutil"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/pg-es/pg-es-proxy/db"
+	"github.com/pg-es/pg-es-proxy/server"
+	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 type bulkResponse struct {
-	Took   int           `json:"took"`
-	Errors bool          `json:"errors"`
-	Items  []interface{} `json:"items"`
+	Took   int   `json:"took"`
+	Errors bool  `json:"errors"`
+	Items  []any `json:"items"`
 }
 
 type bulkPutCommandResponse struct {
 	documentPutResponse
+
 	Status int `json:"status"`
 }
 
 type bulkGetCommandResponse struct {
 	documentGetResponse
+
 	Status int `json:"status"`
 }
 
-type bulkIndexResponse struct {
-	Index bulkPutCommandResponse `json:"index"`
-}
-type bulkCreateResponse struct {
-	Create bulkPutCommandResponse `json:"create"`
-}
-type bulkUpdateResponse struct {
-	Update bulkPutCommandResponse `json:"update"`
-}
-type bulkDeleteResponse struct {
-	Delete bulkGetCommandResponse `json:"delete"`
-}
-
-// BulkHandler handles ElasticSearch bulk requests
-func BulkHandler(endpoint string, r *http.Request, server server.PGElasticServer) (response interface{}, err error) {
-	body, err := ioutil.ReadAll(r.Body)
+// BulkHandler handles ElasticSearch bulk requests.
+func BulkHandler(_ string, r *http.Request, srv server.PGElasticServer) (response any, err error) {
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
 
 	str := string(body)
 	bulkCommands := strings.Split(str, "\n")
-	return ProcessBulkQuery(bulkCommands, server)
+
+	return ProcessBulkQuery(bulkCommands, srv)
 }
 
-// ProcessBulkQuery processes a bulk query
-func ProcessBulkQuery(rawQuery []string, server server.PGElasticServer) (interface{}, error) {
+type bulkDescriptor struct {
+	indexName string
+	typeName  string
+	id        string
+}
+
+func parseBulkDescriptor(val any) (*bulkDescriptor, error) {
+	parsed, ok := val.(map[string]any)
+	if !ok {
+		return nil, utils.NewJSONWrongFormatError("Wrong JSON format")
+	}
+
+	desc := &bulkDescriptor{}
+
+	if idx, ok := parsed["_index"].(string); ok {
+		desc.indexName = idx
+	}
+
+	if typ, ok := parsed["_type"].(string); ok {
+		desc.typeName = typ
+	}
+
+	if id, ok := parsed["_id"].(string); ok {
+		desc.id = id
+	}
+
+	return desc, nil
+}
+
+func resolveAndUpsertDocument(dbClient *db.Client, desc *bulkDescriptor, document string) (*db.ElasticSearchDocument, error) {
+	typeNames, err := dbClient.FindTypes(desc.indexName, desc.typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(typeNames) > 0 {
+		existingDoc, err := dbClient.GetDocument(desc.indexName, desc.typeName, desc.id)
+		if err != nil {
+			return nil, err
+		}
+
+		if existingDoc != nil {
+			return dbClient.UpdateDocument(desc.indexName, desc.typeName, document, desc.id)
+		}
+	}
+
+	return dbClient.CreateDocument(desc.indexName, desc.typeName, document, desc.id)
+}
+
+func executeBulkCommand(
+	action string, desc *bulkDescriptor, nextCommand string, srv server.PGElasticServer,
+) (*db.ElasticSearchDocument, bool, error) {
+	dbClient := srv.GetDBClient()
+
+	switch action {
+	case "index":
+		doc, err := resolveAndUpsertDocument(dbClient, desc, nextCommand)
+		return doc, true, err
+	case "create":
+		doc, err := dbClient.CreateDocument(desc.indexName, desc.typeName, nextCommand, desc.id)
+		return doc, true, err
+	case "update":
+		doc, err := dbClient.UpdateDocument(desc.indexName, desc.typeName, nextCommand, desc.id)
+		return doc, true, err
+	case "delete":
+		doc, err := dbClient.DeleteDocument(desc.indexName, desc.typeName, desc.id)
+		return doc, false, err
+	default:
+		return nil, false, nil
+	}
+}
+
+func buildPutCommandResponse(doc *db.ElasticSearchDocument, indexName, typeName string) bulkPutCommandResponse {
+	result := "updated"
+	if doc.Version == 1 {
+		result = "created"
+	}
+
+	return bulkPutCommandResponse{
+		documentPutResponse{
+			Shards:  shardInfo{1, 0, 1},
+			Index:   indexName,
+			Type:    typeName,
+			ID:      doc.ID,
+			Version: doc.Version,
+			Created: doc.Version == 1,
+			Result:  result,
+		},
+		200,
+	}
+}
+
+func buildDeleteCommandResponse(doc *db.ElasticSearchDocument, indexName, typeName string) bulkGetCommandResponse {
+	cmd := bulkGetCommandResponse{
+		documentGetResponse{
+			Index: indexName,
+			Type:  typeName,
+			Found: doc != nil,
+		},
+		200,
+	}
+
+	if doc != nil {
+		cmd.Version = doc.Version
+		cmd.Document = doc.Document
+		cmd.ID = doc.ID
+	}
+
+	return cmd
+}
+
+func buildBulkItemResponse(
+	action string, doc *db.ElasticSearchDocument, indexName, typeName string, err error,
+) (item map[string]any, hasError bool, fatalErr error) {
+	responseCommand := make(map[string]any)
+
+	if err != nil {
+		if elasticErr, ok := errors.AsType[utils.ElasticError](err); ok {
+			responseCommand[action] = utils.NewElasticBulkError(elasticErr, indexName, "1", "1").FormatErrorResponse()
+			return responseCommand, true, nil
+		}
+
+		return nil, true, err
+	}
+
+	switch action {
+	case "index", "create", "update":
+		if doc != nil {
+			responseCommand[action] = buildPutCommandResponse(doc, indexName, typeName)
+		} else {
+			responseCommand[action] = utils.NewElasticBulkError(
+				utils.NewInternalError("Unknown error"), indexName, "1", "1",
+			).FormatErrorResponse()
+
+			return responseCommand, true, nil
+		}
+	case "delete":
+		responseCommand["delete"] = buildDeleteCommandResponse(doc, indexName, typeName)
+	}
+
+	return responseCommand, false, nil
+}
+
+// ProcessBulkQuery processes a bulk query.
+func ProcessBulkQuery(rawQuery []string, srv server.PGElasticServer) (any, error) {
 	response := bulkResponse{}
-	response.Errors = false
 	skip := false
 	startTime := time.Now()
-	for i, command := range rawQuery {
-		if skip || strings.Compare(command, "") == 0 {
+
+	for idx, command := range rawQuery {
+		if skip || command == "" {
 			skip = false
 			continue
 		}
-		var parsedJson map[string]interface{}
-		var documentObject *db.ElasticSearchDocument
 
-		err := json.Unmarshal([]byte(command), &parsedJson)
+		var parsedJSON map[string]any
+
+		err := json.Unmarshal([]byte(command), &parsedJSON)
 		if err != nil {
 			return nil, utils.NewJSONWrongFormatError(err.Error())
 		}
 
-		for k, v := range parsedJson {
-			responseCommand := make(map[string]interface{})
-			if _, ok := v.(map[string]interface{}); !ok {
-				return nil, utils.NewJSONWrongFormatError("Wrong JSON format")
-			}
-			indexDescriptor := v.(map[string]interface{})
-			indexName := indexDescriptor["_index"].(string)
-			typeName := indexDescriptor["_type"].(string)
-			id := ""
-			if _, ok := indexDescriptor["_id"].(string); ok {
-				id = indexDescriptor["_id"].(string)
+		for action, val := range parsedJSON {
+			desc, err := parseBulkDescriptor(val)
+			if err != nil {
+				return nil, err
 			}
 
-			switch k {
-			case "index":
-				typeNames, err := server.GetDBClient().FindTypes(indexName, typeName)
-				var documentObject *db.ElasticSearchDocument
-				documentObject = nil
-				if err != nil {
-					response.Errors = true
-					return nil, err
-				} else if len(typeNames) > 0 {
-					documentObject, err = server.GetDBClient().GetDocument(indexName, typeName, id)
-					if err != nil {
-						response.Errors = true
-						return nil, err
-					}
-				}
-				if documentObject == nil {
-					documentObject, err = server.GetDBClient().CreateDocument(indexName, typeName, rawQuery[i+1], id)
-				} else {
-					documentObject, err = server.GetDBClient().UpdateDocument(indexName, typeName, rawQuery[i+1], id)
-				}
-				skip = true
-			case "create":
-				documentObject, err = server.GetDBClient().CreateDocument(indexName, typeName, rawQuery[i+1], id)
-				skip = true
-			case "update":
-				documentObject, err = server.GetDBClient().UpdateDocument(indexName, typeName, rawQuery[i+1], id)
-				skip = true
-			case "delete":
-				documentObject, err = server.GetDBClient().DeleteDocument(indexName, typeName, id)
+			nextCommand := ""
+			if idx+1 < len(rawQuery) {
+				nextCommand = rawQuery[idx+1]
 			}
-			if err != nil {
+
+			doc, shouldSkip, err := executeBulkCommand(action, desc, nextCommand, srv)
+			skip = shouldSkip
+
+			item, hasError, fatalErr := buildBulkItemResponse(action, doc, desc.indexName, desc.typeName, err)
+			if fatalErr != nil {
+				return nil, fatalErr
+			}
+
+			if hasError {
 				response.Errors = true
-				if _, ok := err.(utils.ElasticError); ok {
-					responseCommand[k] = utils.NewElasticErrorBulk(err.(utils.ElasticError), indexName, "1", "1").FormatErrorResponse()
-				} else {
-					return nil, err
-				}
 			}
-			switch k {
-			case "index", "create", "update":
-				if documentObject != nil {
-					command := bulkPutCommandResponse{
-						documentPutResponse{
-							Shards:  shardInfo{1, 0, 1},
-							Index:   indexName,
-							Type:    typeName,
-							ID:      documentObject.ID,
-							Version: documentObject.Version,
-							Created: documentObject.Version == 1,
-							Result: func() string {
-								if documentObject.Version == 1 {
-									return "created"
-								}
-								return "updated"
-							}(),
-						},
-						200,
-					}
-					responseCommand[k] = command
-				} else if err == nil {
-					responseCommand[k] = utils.NewElasticErrorBulk(utils.NewInternalError("Unknown error"), indexName, "1", "1").FormatErrorResponse()
-					response.Errors = true
-				}
-			case "delete":
-				command := bulkGetCommandResponse{
-					documentGetResponse{
-						Index: indexName,
-						Type:  typeName,
-						Found: documentObject != nil,
-					},
-					200,
-				}
-				if documentObject != nil {
-					command.Version = documentObject.Version
-					command.Document = documentObject.Document
-					command.ID = documentObject.ID
-				}
-				responseCommand["delete"] = command
-			}
-			response.Items = append(response.Items, responseCommand)
+
+			response.Items = append(response.Items, item)
 		}
 	}
-	response.Took = (int)(time.Since(startTime).Nanoseconds() / 1000000.0)
+
+	response.Took = int(time.Since(startTime).Milliseconds())
 
 	return response, nil
 }
