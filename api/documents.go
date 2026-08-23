@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/pg-es/pg-es-proxy/api/search"
@@ -84,17 +83,21 @@ func putOrUpdateDocument(srv server.PGElasticServer, index, typeName, body, docu
 }
 
 // PutDocumentHandler handles request to put document into storage.
-func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, srv server.PGElasticServer) (any, error) {
+func PutDocumentHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
+	index := r.PathValue("index")
+	typeName := r.PathValue("type")
+	id := r.PathValue("id")
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
 
 	var documentObject *db.ElasticSearchDocument
-	if endpoint == "" {
+	if id == "" {
 		documentObject, err = srv.GetDBClient().CreateDocument(index, typeName, string(body), "")
 	} else {
-		documentObject, err = putOrUpdateDocument(srv, index, typeName, string(body), endpoint)
+		documentObject, err = putOrUpdateDocument(srv, index, typeName, string(body), id)
 	}
 
 	if err != nil {
@@ -121,8 +124,10 @@ func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, srv s
 }
 
 // GetDocumentHandler handles request to get document from storage.
-func GetDocumentHandler(index, typeName, endpoint string, _ *http.Request, srv server.PGElasticServer) (response any, err error) {
-	documentID := endpoint
+func GetDocumentHandler(r *http.Request, srv server.PGElasticServer) (response any, err error) {
+	index := r.PathValue("index")
+	typeName := r.PathValue("type")
+	documentID := r.PathValue("id")
 
 	documentObject, err := srv.GetDBClient().GetDocument(index, typeName, documentID)
 	if err != nil {
@@ -150,8 +155,10 @@ func GetDocumentHandler(index, typeName, endpoint string, _ *http.Request, srv s
 }
 
 // DeleteDocumentHandler handles request to delete document from storage.
-func DeleteDocumentHandler(index, typeName, endpoint string, _ *http.Request, srv server.PGElasticServer) (response any, err error) {
-	documentID := endpoint
+func DeleteDocumentHandler(r *http.Request, srv server.PGElasticServer) (response any, err error) {
+	index := r.PathValue("index")
+	typeName := r.PathValue("type")
+	documentID := r.PathValue("id")
 
 	documentObject, err := srv.GetDBClient().DeleteDocument(index, typeName, documentID)
 	if err != nil {
@@ -228,8 +235,7 @@ func executeSearchQuery(
 	return &resp, nil
 }
 
-// FindDocumentHandler handles request to find document on storage.
-func FindDocumentHandler(indexPattern, typePattern, _ string, r *http.Request, srv server.PGElasticServer) (response any, err error) {
+func findDocuments(indexPattern, typePattern string, r *http.Request, srv server.PGElasticServer) (any, error) {
 	startTime := time.Now()
 
 	var parsedQuery any
@@ -278,10 +284,12 @@ func FindDocumentHandler(indexPattern, typePattern, _ string, r *http.Request, s
 	return nil, utils.NewIllegalQueryError("Illegal search query")
 }
 
-// FindIndexDocumentHandler handles request to find document of any type on storage.
-func FindIndexDocumentHandler(endpoint string, r *http.Request, srv server.PGElasticServer) (response any, err error) {
-	indexHandlerPattern := regexp.MustCompile(`^/(?P<index>\w+)/_search`)
-	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
+// FindDocumentHandler handles request to find document on storage.
+func FindDocumentHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
+	return findDocuments(r.PathValue("index"), r.PathValue("type"), r, srv)
+}
 
-	return FindDocumentHandler(indexName, "*", endpoint, r, srv)
+// FindIndexDocumentHandler handles request to find document of any type on storage.
+func FindIndexDocumentHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
+	return findDocuments(r.PathValue("index"), "*", r, srv)
 }

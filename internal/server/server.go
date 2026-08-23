@@ -4,11 +4,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 	"time"
 
-	"github.com/pg-es/pg-es-proxy/api"
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/server"
 	"github.com/pg-es/pg-es-proxy/utils"
@@ -24,7 +22,7 @@ var errDBNotConnected = errors.New("database connection is not established")
 
 // PGElasticServerProto describes a server runtime instance and its configuration.
 type PGElasticServerProto struct {
-	handler  *server.ElasticHandler
+	handler  http.Handler
 	config   *utils.PGElasticConfig
 	dbclient *db.Client
 }
@@ -33,7 +31,6 @@ type PGElasticServerProto struct {
 func InitializeServer(configFileName string) (server.PGElasticServer, error) {
 	srv := new(PGElasticServerProto)
 	srv.config = utils.ReadConfig(configFileName)
-	srv.handler = server.NewElasticHandler(srv)
 	srv.dbclient = db.CreateClient(srv.config.PostgresConfig)
 
 	if srv.dbclient == nil {
@@ -45,7 +42,7 @@ func InitializeServer(configFileName string) (server.PGElasticServer, error) {
 		return nil, err
 	}
 
-	srv.configureHandler()
+	srv.handler = ElasticProductMiddleware(NewRouter(srv))
 
 	return srv, nil
 }
@@ -73,22 +70,4 @@ func (s *PGElasticServerProto) Start() {
 	}
 
 	log.Fatal(srv.ListenAndServe())
-}
-
-// configureHandler sets up all handlers of the server.
-func (s *PGElasticServerProto) configureHandler() {
-	s.handler.HandleFunc(regexp.MustCompile("^/_cluster/health"), api.HealthHandler, []string{http.MethodGet})
-	s.handler.HandleFunc(regexp.MustCompile("^/_bulk"), api.BulkHandler, []string{http.MethodPost})
-
-	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*/_mapping/\w+`), api.PutTypeMapping, []string{http.MethodPut})
-
-	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*`), api.PutIndexHandler, []string{http.MethodPut})
-	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*`), api.HeadIndexHandler, []string{http.MethodHead})
-
-	s.handler.HandleFunc(regexp.MustCompile(`^/[^_]\w*/_search`), api.FindIndexDocumentHandler, []string{http.MethodGet})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile("^_search"), api.FindDocumentHandler, []string{http.MethodGet})
-
-	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w*`), api.PutDocumentHandler, []string{http.MethodPut, http.MethodPost})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w+`), api.GetDocumentHandler, []string{http.MethodGet})
-	s.handler.HandleFuncEndpoint(regexp.MustCompile(`^\w+`), api.DeleteDocumentHandler, []string{http.MethodDelete})
 }

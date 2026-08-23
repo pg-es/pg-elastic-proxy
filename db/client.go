@@ -120,7 +120,7 @@ func (dbc *Client) CreateIndex(indexName, options string) (*IndexRecord, error) 
 			return nil, utils.NewDBQueryError(err.Error())
 		}
 	} else {
-		return nil, utils.NewIllegalQueryError("Index already exists")
+		return nil, utils.NewResourceAlreadyExistsError("Index already exists")
 	}
 
 	err = indexSelectQuery.Select(&indexRecord)
@@ -204,7 +204,7 @@ func (dbc *Client) CreateType(indexName, typeName, options string) (*TypeRecord,
 			return nil, utils.NewDBQueryError(err.Error())
 		}
 	} else {
-		return nil, utils.NewIllegalQueryError("Type already exists")
+		return nil, utils.NewResourceAlreadyExistsError("Type already exists")
 	}
 
 	return &typeRecord, nil
@@ -305,7 +305,7 @@ func (dbc *Client) CreateDocument(indexName, typeName, document, documentID stri
 		}
 
 		if documentExist {
-			return nil, utils.NewDBQueryError(fmt.Sprintf("Document with ID %s already exists", documentID))
+			return nil, utils.NewVersionConflictError(fmt.Sprintf("Document with ID %s already exists", documentID))
 		}
 
 		result, err = dbc.insertDocumentID(indexName, typeName, document, documentID)

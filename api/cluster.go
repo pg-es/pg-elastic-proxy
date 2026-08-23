@@ -25,7 +25,7 @@ type clusterHealth struct {
 }
 
 // HealthHandler processes a health-check response.
-func HealthHandler(_ string, _ *http.Request, _ server.PGElasticServer) (any, error) {
+func HealthHandler(_ *http.Request, _ server.PGElasticServer) (any, error) {
 	health := clusterHealth{}
 	health.Name = "pg_elastic_cluster"
 	health.Status = "yellow"
