@@ -1,0 +1,5 @@
+FROM gcr.io/distroless/static:nonroot
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/pg-es-proxy /pg-es-proxy
+USER nonroot
+ENTRYPOINT ["/pg-es-proxy"]

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Run goreleaser snapshot release (local dry-run)"
+set -euo pipefail
+
+exec goreleaser release --snapshot --clean
