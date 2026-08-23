@@ -51,7 +51,7 @@ func wrapRequestHandler(handler server.ElasticRequestHandler, srv server.PGElast
 }
 
 // wrapIndexRequestHandler adapts an [server.ElasticRequestHandler] for routes
-// containing an {index} path parameter, rejecting "_"-prefixed indices.
+// containing an {index} path parameter
 func wrapIndexRequestHandler(handler server.ElasticRequestHandler, srv server.PGElasticServer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validName(r.PathValue("index")) {
