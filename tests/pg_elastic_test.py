@@ -57,4 +57,3 @@ class TestBasic:
     def test_health(self):
         health = connections.get_connection().cluster.health()
         assert(health['status'] == 'yellow' or health['status'] == 'green')
-
