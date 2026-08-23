@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"net/http"
 )
 
 // ElasticError is a basic interface for any kind of errors produced by pg-elastic
@@ -10,6 +11,7 @@ type ElasticError interface {
 	error
 	Type() string
 	Reason() string
+	StatusCode() int
 	FormatErrorResponse() any
 }
 
@@ -21,6 +23,11 @@ type ElasticGeneralError struct {
 
 func (err *ElasticGeneralError) Error() string {
 	return fmt.Sprintf("Error type: %s, Reason: %s", err.Type(), err.Reason())
+}
+
+// StatusCode returns the HTTP status code for this error.
+func (err *ElasticGeneralError) StatusCode() int {
+	return http.StatusInternalServerError
 }
 
 // Type returns name of the error type.
@@ -44,7 +51,7 @@ func (err *ElasticGeneralError) FormatErrorResponse() any {
 		ReasonVal: err.Reason(),
 	}
 	output["error"] = errorDesc
-	output["status"] = 500
+	output["status"] = err.StatusCode()
 
 	return output
 }
@@ -95,6 +102,11 @@ func NewJSONWrongFormatError(reason string) *JSONWrongFormatError {
 	return &JSONWrongFormatError{ElasticGeneralError{TypeVal: "json_parse_exception", ReasonVal: reason}}
 }
 
+// StatusCode returns 400 for malformed JSON input.
+func (err *JSONWrongFormatError) StatusCode() int {
+	return http.StatusBadRequest
+}
+
 // DBQueryError is error caused by any internal error of the database.
 type DBQueryError struct {
 	ElasticGeneralError
@@ -132,5 +144,40 @@ type IllegalQueryError struct {
 
 // NewIllegalQueryError creates a new instance of IllegalQueryError.
 func NewIllegalQueryError(reason string) *IllegalQueryError {
-	return &IllegalQueryError{ElasticGeneralError{TypeVal: "illegal_query_exception", ReasonVal: reason}}
+	return &IllegalQueryError{ElasticGeneralError{TypeVal: "illegal_argument_exception", ReasonVal: reason}}
+}
+
+// StatusCode returns 400 for illegal query input.
+func (err *IllegalQueryError) StatusCode() int {
+	return http.StatusBadRequest
+}
+
+// ResourceAlreadyExistsError is returned when an index or type already exists.
+type ResourceAlreadyExistsError struct {
+	ElasticGeneralError
+}
+
+// NewResourceAlreadyExistsError creates a new instance of ResourceAlreadyExistsError.
+func NewResourceAlreadyExistsError(reason string) *ResourceAlreadyExistsError {
+	return &ResourceAlreadyExistsError{ElasticGeneralError{TypeVal: "resource_already_exists_exception", ReasonVal: reason}}
+}
+
+// StatusCode returns 400 for resource-already-exists errors.
+func (err *ResourceAlreadyExistsError) StatusCode() int {
+	return http.StatusBadRequest
+}
+
+// VersionConflictError is returned when a document version conflict occurs.
+type VersionConflictError struct {
+	ElasticGeneralError
+}
+
+// NewVersionConflictError creates a new instance of VersionConflictError.
+func NewVersionConflictError(reason string) *VersionConflictError {
+	return &VersionConflictError{ElasticGeneralError{TypeVal: "version_conflict_engine_exception", ReasonVal: reason}}
+}
+
+// StatusCode returns 409 for version conflict errors.
+func (err *VersionConflictError) StatusCode() int {
+	return http.StatusConflict
 }

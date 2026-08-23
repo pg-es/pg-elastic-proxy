@@ -117,11 +117,11 @@ type errorBody struct {
 // [utils.ElasticError] values as JSON error bodies.
 func processResponse(w http.ResponseWriter, r *http.Request, output any, err error) {
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-
 		if elasticErr, ok := errors.AsType[utils.ElasticError](err); ok {
+			w.WriteHeader(elasticErr.StatusCode())
 			output = elasticErr.FormatErrorResponse()
 		} else {
+			w.WriteHeader(http.StatusInternalServerError)
 			log.Printf("internal error: %v", err)
 			writeJSON(w, r, errorBody{Error: "internal server error"})
 
@@ -148,6 +148,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, output any) {
 	}
 
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("json marshal error: %v", err)
 
 		fallback, _ := json.Marshal(errorBody{Error: "response serialization failed"})
