@@ -9,7 +9,7 @@ type ElasticError interface {
 	error
 	Type() string
 	Reason() string
-	FormatErrorResponse() interface{}
+	FormatErrorResponse() any
 }
 
 // ElasticErrorGeneral represents a response format for JSON error report 'cause' part
@@ -71,21 +71,22 @@ func (err *ElasticErrorGeneral) Reason() string {
 	return err.ReasonVal
 }
 
-// FormatErrorResponse generates an JSON output for an error
-func (err *ElasticErrorGeneral) FormatErrorResponse() interface{} {
-	output := make(map[string]interface{})
-	errorDesc := ElasticErrorGeneralResponse{}
-	errorDesc.RootCause = []ElasticErrorGeneral{{err.Type(), err.Reason()}}
-	errorDesc.ReasonVal = err.Reason()
-	errorDesc.TypeVal = err.Type()
+// FormatErrorResponse generates a JSON output for an error
+func (err *ElasticErrorGeneral) FormatErrorResponse() any {
+	output := make(map[string]any)
+	errorDesc := ElasticErrorGeneralResponse{
+		RootCause: []ElasticErrorGeneral{{err.Type(), err.Reason()}},
+		TypeVal:   err.Type(),
+		ReasonVal: err.Reason(),
+	}
 	output["error"] = errorDesc
 	output["status"] = 500
 	return output
 }
 
-// FormatErrorResponse generates an JSON output for an error
-func (err *ElasticErrorBulk) FormatErrorResponse() interface{} {
-	output := make(map[string]interface{})
+// FormatErrorResponse generates a JSON output for an error
+func (err *ElasticErrorBulk) FormatErrorResponse() any {
+	output := make(map[string]any)
 	output["error"] = err
 	return output
 }

@@ -2,15 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"time"
+
 	"github.com/pg-es/pg-es-proxy/api/search"
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/server"
 	"github.com/pg-es/pg-es-proxy/utils"
-	"io"
-	"net/http"
-	"regexp"
-	"strings"
-	"time"
 )
 
 type shardInfo struct {
@@ -36,20 +37,20 @@ type documentPutResponse struct {
 }
 
 type documentGetResponse struct {
-	Index    string      `json:"_index"`
-	Type     string      `json:"_type"`
-	ID       string      `json:"_id"`
-	Version  int         `json:"_version"`
-	Found    bool        `json:"found"`
-	Document interface{} `json:"_source"`
+	Index    string `json:"_index"`
+	Type     string `json:"_type"`
+	ID       string `json:"_id"`
+	Version  int    `json:"_version"`
+	Found    bool   `json:"found"`
+	Document any    `json:"_source"`
 }
 
 type documentSearchResponse struct {
-	Index    string      `json:"_index"`
-	Type     string      `json:"_type"`
-	ID       string      `json:"_id"`
-	Score    float32     `json:"_score"`
-	Document interface{} `json:"_source"`
+	Index    string  `json:"_index"`
+	Type     string  `json:"_type"`
+	ID       string  `json:"_id"`
+	Score    float32 `json:"_score"`
+	Document any     `json:"_source"`
 }
 
 type searchResponse struct {
@@ -69,32 +70,32 @@ func formatDocumentSearchResponse(index, typeName string, doc db.ElasticSearchDo
 	}
 }
 
+func putOrUpdateDocument(s server.PGElasticServer, index, typeName, body, documentID string) (*db.ElasticSearchDocument, error) {
+	exists, err := s.GetDBClient().IsDocumentExists(index, typeName, documentID)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return s.GetDBClient().UpdateDocument(index, typeName, body, documentID)
+	}
+	return s.GetDBClient().CreateDocument(index, typeName, body, documentID)
+}
+
 // PutDocumentHandler handles request to put document into storage
-func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, s server.PGElasticServer) (interface{}, error) {
-	var documentObject *db.ElasticSearchDocument
+func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, s server.PGElasticServer) (any, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, utils.NewInternalIOError(err.Error())
 	}
-	if strings.Compare(endpoint, "") == 0 {
+
+	var documentObject *db.ElasticSearchDocument
+	if endpoint == "" {
 		documentObject, err = s.GetDBClient().CreateDocument(index, typeName, string(body), "")
-		if err != nil {
-			return nil, err
-		}
 	} else {
-		documentID := endpoint
-		exists, err := s.GetDBClient().IsDocumentExists(index, typeName, documentID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			documentObject, err = s.GetDBClient().UpdateDocument(index, typeName, string(body), documentID)
-		} else {
-			documentObject, err = s.GetDBClient().CreateDocument(index, typeName, string(body), documentID)
-		}
-		if err != nil {
-			return nil, err
-		}
+		documentObject, err = putOrUpdateDocument(s, index, typeName, string(body), endpoint)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	response := documentPutResponse{
@@ -116,7 +117,7 @@ func PutDocumentHandler(index, typeName, endpoint string, r *http.Request, s ser
 }
 
 // GetDocumentHandler handles request to get document from storage
-func GetDocumentHandler(index, typeName, endpoint string, r *http.Request, s server.PGElasticServer) (response interface{}, err error) {
+func GetDocumentHandler(index, typeName, endpoint string, _ *http.Request, s server.PGElasticServer) (response any, err error) {
 	documentID := endpoint
 	documentObject, err := s.GetDBClient().GetDocument(index, typeName, documentID)
 	if err != nil {
@@ -137,13 +138,12 @@ func GetDocumentHandler(index, typeName, endpoint string, r *http.Request, s ser
 			Type:  typeName,
 			Found: false,
 		}
-
 	}
 	return response, nil
 }
 
 // DeleteDocumentHandler handles request to delete document from storage
-func DeleteDocumentHandler(index, typeName, endpoint string, r *http.Request, s server.PGElasticServer) (response interface{}, err error) {
+func DeleteDocumentHandler(index, typeName, endpoint string, _ *http.Request, s server.PGElasticServer) (response any, err error) {
 	documentID := endpoint
 	documentObject, err := s.GetDBClient().DeleteDocument(index, typeName, documentID)
 	if err != nil {
@@ -164,15 +164,55 @@ func DeleteDocumentHandler(index, typeName, endpoint string, r *http.Request, s 
 			Type:  typeName,
 			Found: false,
 		}
-
 	}
 	return response, nil
 }
 
+func executeSearchQuery(s server.PGElasticServer, index, typeName string, queryBody map[string]any, startTime time.Time) (*searchResponse, error) {
+	var typeMapping map[string]any
+
+	// Get type mapping from system type record
+	docType, err := s.GetDBClient().GetType(index, typeName)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(docType.Options), &typeMapping); err != nil {
+		return nil, fmt.Errorf("unmarshaling type mapping: %w", err)
+	}
+
+	query := s.GetDBClient().NewQuery(index, typeName)
+	search.ParseSearchQuery(queryBody, query, typeMapping)
+	docs, err := s.GetDBClient().ProcessSearchQuery(index, typeName, query)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := searchResponse{
+		Took:     1,
+		TimedOut: false,
+		Shards:   shardInfo{1, 0, 1},
+		Hits: searchHits{
+			MaxScore: 0,
+			Total:    0,
+			Hits:     []documentSearchResponse{},
+		},
+	}
+	for _, doc := range docs {
+		docResponse := formatDocumentSearchResponse(index, typeName, doc)
+		resp.Hits.Hits = append(resp.Hits.Hits, docResponse)
+		if resp.Hits.MaxScore < docResponse.Score {
+			resp.Hits.MaxScore = docResponse.Score
+		}
+		resp.Hits.Total++
+	}
+	resp.Took = int(time.Since(startTime).Nanoseconds() / 1000000)
+	return &resp, nil
+}
+
 // FindDocumentHandler handles request to find document on storage
-func FindDocumentHandler(indexPattern, typePattern, endpoint string, r *http.Request, s server.PGElasticServer) (response interface{}, err error) {
+func FindDocumentHandler(indexPattern, typePattern, _ string, r *http.Request, s server.PGElasticServer) (response any, err error) {
 	startTime := time.Now()
-	var parsedQuery interface{}
+	var parsedQuery any
 	indices, err := s.GetDBClient().FindIndices(indexPattern)
 	if err != nil {
 		return nil, utils.NewInternalError(err.Error())
@@ -187,62 +227,34 @@ func FindDocumentHandler(indexPattern, typePattern, endpoint string, r *http.Req
 		return nil, utils.NewJSONWrongFormatError(err.Error())
 	}
 
+	queryMap, ok := parsedQuery.(map[string]any)
+	if !ok {
+		return nil, utils.NewJSONWrongFormatError("expected JSON object")
+	}
+
 	for _, index := range indices {
 		types, err := s.GetDBClient().FindTypes(index, typePattern)
 		if err != nil {
 			return nil, utils.NewInternalError(err.Error())
 		}
 		for _, typeName := range types {
-			for k, v := range parsedQuery.(map[string]interface{}) {
-				switch k {
-				case "query":
-					var typeMapping map[string]interface{}
-
-					// Get type mapping from system type record
-					docType, err := s.GetDBClient().GetType(index, typeName)
-					if err != nil {
-						return nil, err
-					}
-					if err := json.Unmarshal([]byte(docType.Options), &typeMapping); err != nil {
-						return nil, err
-					}
-
-					query := s.GetDBClient().NewQuery(index, typeName)
-					search.ParseSearchQuery(v.(map[string]interface{}), query, typeMapping)
-					docs, err := s.GetDBClient().ProcessSearchQuery(index, typeName, query)
-					if err != nil {
-						return nil, err
-					}
-					response := searchResponse{
-						Took:     1,
-						TimedOut: false,
-						Shards:   shardInfo{1, 0, 1},
-						Hits: searchHits{
-							MaxScore: 0,
-							Total:    0,
-							Hits:     []documentSearchResponse{},
-						},
-					}
-					for _, doc := range docs {
-						docResponse := formatDocumentSearchResponse(index, typeName, doc)
-						response.Hits.Hits = append(response.Hits.Hits, docResponse)
-						if response.Hits.MaxScore < docResponse.Score {
-							response.Hits.MaxScore = docResponse.Score
-						}
-						response.Hits.Total += 1
-					}
-					response.Took = (int)(time.Since(startTime).Nanoseconds() / 1000000.0)
-					return response, nil
-				}
+			queryBody, ok := queryMap["query"].(map[string]any)
+			if !ok {
+				continue
 			}
+			resp, err := executeSearchQuery(s, index, typeName, queryBody, startTime)
+			if err != nil {
+				return nil, err
+			}
+			return resp, nil
 		}
 	}
 	return nil, utils.NewIllegalQueryError("Illegal search query")
 }
 
 // FindIndexDocumentHandler handles request to find document of any type on storage
-func FindIndexDocumentHandler(endpoint string, r *http.Request, s server.PGElasticServer) (response interface{}, err error) {
-	var indexHandlerPattern = regexp.MustCompile(`^/(?P<index>\w+)/_search`)
+func FindIndexDocumentHandler(endpoint string, r *http.Request, s server.PGElasticServer) (response any, err error) {
+	indexHandlerPattern := regexp.MustCompile(`^/(?P<index>\w+)/_search`)
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
 	return FindDocumentHandler(indexName, "*", endpoint, r, s)
 }

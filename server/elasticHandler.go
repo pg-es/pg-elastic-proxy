@@ -2,19 +2,21 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/pg-es/pg-es-proxy/utils"
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
+	"slices"
+
+	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 // ElasticEndpointRequestHandler is a handler function for requests with URL: /<index>/<type>/<endpoint>. Index, type and endpoint are automatically extracted from URL
-type ElasticEndpointRequestHandler func(string, string, string, *http.Request, PGElasticServer) (interface{}, error)
+type ElasticEndpointRequestHandler func(string, string, string, *http.Request, PGElasticServer) (any, error)
 
 // ElasticRequestHandler is a handler function for any request
-type ElasticRequestHandler func(string, *http.Request, PGElasticServer) (interface{}, error)
+type ElasticRequestHandler func(string, *http.Request, PGElasticServer) (any, error)
 
 type regexpRoute struct {
 	pattern *regexp.Regexp
@@ -70,13 +72,14 @@ func (h *ElasticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Print message about unsupported /<index>/<type>/<endpoint> request
-		fmt.Fprintf(w, "Index: %s\n", indexName)                   //nolint:errcheck // best-effort debug write to ResponseWriter
-		fmt.Fprintf(w, "Type: %s\n", typeName)                     //nolint:errcheck // best-effort debug write to ResponseWriter
-		fmt.Fprintf(w, "Endpoint: <%s> not supported\n", endpoint) //nolint:errcheck // best-effort debug write to ResponseWriter
-
+		// Return JSON error for unsupported endpoint
 		w.WriteHeader(http.StatusNotFound)
-		r.Write(w) //nolint:errcheck // best-effort request dump to ResponseWriter
+		h.writeOutput(w, r, map[string]any{
+			"error":    "endpoint not supported",
+			"index":    indexName,
+			"type":     typeName,
+			"endpoint": endpoint,
+		})
 	} else {
 		for _, route := range h.specialRoutes {
 			if route.pattern.MatchString(r.URL.Path) && supportMethod(r.Method, route.methods) {
@@ -87,17 +90,17 @@ func (h *ElasticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Print message about unsupported request
 		fmt.Println(r.URL)
-
-		r.Write(os.Stderr) //nolint:errcheck // best-effort request dump to stderr
+		r.Write(os.Stderr) //nolint:errcheck,gosec // best-effort request dump to stderr for debugging
 		http.NotFound(w, r)
 	}
 }
 
 // Print output structure in JSON format to ResponseWriter
-func (h *ElasticHandler) writeOutput(w http.ResponseWriter, r *http.Request, output interface{}) {
+func (h *ElasticHandler) writeOutput(w http.ResponseWriter, r *http.Request, output any) {
 	var err error
 	var b []byte
-	if strings.Compare(r.URL.Query().Get("pretty"), "true") == 0 || strings.Compare(r.URL.Query().Get("pretty"), "") == 0 {
+	pretty := r.URL.Query().Get("pretty")
+	if pretty == "true" || pretty == "" {
 		b, err = json.MarshalIndent(output, "", "    ")
 	} else {
 		b, err = json.Marshal(output)
@@ -105,20 +108,20 @@ func (h *ElasticHandler) writeOutput(w http.ResponseWriter, r *http.Request, out
 	if err != nil {
 		panic(err)
 	}
-	w.Write(b) //nolint:errcheck // best-effort JSON write to ResponseWriter
+	w.Write(b) //nolint:errcheck,gosec // best-effort JSON write to ResponseWriter
 }
 
 // Process output of request processing with respect to errors
-func (h *ElasticHandler) processRequestOutput(w http.ResponseWriter, r *http.Request, output interface{}, err error) {
+func (h *ElasticHandler) processRequestOutput(w http.ResponseWriter, r *http.Request, output any, err error) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		if _, ok := err.(utils.ElasticError); ok {
-			output = (err.(utils.ElasticError)).FormatErrorResponse()
+		if elasticErr, ok := errors.AsType[utils.ElasticError](err); ok {
+			output = elasticErr.FormatErrorResponse()
 		} else {
 			panic(err)
 		}
 	}
-	if r := recover(); r != nil {
+	if recovered := recover(); recovered != nil {
 		output = nil
 	}
 	h.writeOutput(w, r, output)
@@ -126,10 +129,5 @@ func (h *ElasticHandler) processRequestOutput(w http.ResponseWriter, r *http.Req
 
 // Check if target method is presented in supportedMethods slice
 func supportMethod(method string, supportedMethods []string) bool {
-	for _, m := range supportedMethods {
-		if strings.Compare(method, m) == 0 {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(supportedMethods, method)
 }

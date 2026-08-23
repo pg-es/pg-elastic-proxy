@@ -1,8 +1,9 @@
 package api
 
 import (
-	"github.com/pg-es/pg-es-proxy/server"
 	"net/http"
+
+	"github.com/pg-es/pg-es-proxy/server"
 )
 
 // ClusterHealth describes JSON schema for _cluster/health requests
@@ -24,7 +25,7 @@ type clusterHealth struct {
 }
 
 // HealthHandler process a health-check response
-func HealthHandler(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
+func HealthHandler(_ string, _ *http.Request, _ server.PGElasticServer) (any, error) {
 	health := clusterHealth{}
 	health.Name = "pg_elastic_cluster"
 	health.Status = "yellow"

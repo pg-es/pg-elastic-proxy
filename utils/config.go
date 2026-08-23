@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 // PGElasticConfig represents structure of the pg-elastic configuration
@@ -22,14 +23,19 @@ type PostgresConnectionConfig struct {
 
 // ReadConfig reads a configuration from the file at path
 func ReadConfig(path string) *PGElasticConfig {
-	file, _ := os.Open(path)
-	decoder := json.NewDecoder(file)
-	config := &PGElasticConfig{}
-	err := decoder.Decode(config)
-
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	config := &PGElasticConfig{}
+	decodeErr := json.NewDecoder(file).Decode(config)
+
+	if closeErr := file.Close(); closeErr != nil {
+		log.Fatal(closeErr)
+	}
+	if decodeErr != nil {
+		log.Fatal(decodeErr)
+	}
 	return config
 }

@@ -2,11 +2,12 @@ package api
 
 import (
 	"fmt"
-	"github.com/pg-es/pg-es-proxy/server"
-	"github.com/pg-es/pg-es-proxy/utils"
 	"io"
 	"net/http"
 	"regexp"
+
+	"github.com/pg-es/pg-es-proxy/server"
+	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 type indexPutResponse struct {
@@ -18,11 +19,13 @@ type typePutResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
-var putTypeMappingPattern = regexp.MustCompile(`/(?P<index>\w+)/_mapping/(?P<type>\w+)`)
-var indexHandlerPattern = regexp.MustCompile(`/(?P<index>\w+)`)
+var (
+	putTypeMappingPattern = regexp.MustCompile(`/(?P<index>\w+)/_mapping/(?P<type>\w+)`)
+	indexHandlerPattern   = regexp.MustCompile(`/(?P<index>\w+)`)
+)
 
 // PutIndexHandler process a response to put a new index into database
-func PutIndexHandler(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
+func PutIndexHandler(endpoint string, r *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
 	optionsBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -30,7 +33,7 @@ func PutIndexHandler(endpoint string, r *http.Request, server server.PGElasticSe
 	}
 	options := string(optionsBytes)
 
-	_, err = server.GetDBClient().CreateIndex(indexName, options)
+	_, err = srv.GetDBClient().CreateIndex(indexName, options)
 	if err != nil {
 		return nil, err
 	}
@@ -39,9 +42,9 @@ func PutIndexHandler(endpoint string, r *http.Request, server server.PGElasticSe
 }
 
 // HeadIndexHandler process a response to check is an index exists in database
-func HeadIndexHandler(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
+func HeadIndexHandler(endpoint string, _ *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := indexHandlerPattern.ReplaceAllString(endpoint, "${index}")
-	indexRecord, err := server.GetDBClient().GetIndex(indexName)
+	indexRecord, err := srv.GetDBClient().GetIndex(indexName)
 	if err != nil {
 		fmt.Println(err)
 		return false, err
@@ -50,7 +53,7 @@ func HeadIndexHandler(endpoint string, r *http.Request, server server.PGElasticS
 }
 
 // PutTypeMapping process a response to put a type mapping into database
-func PutTypeMapping(endpoint string, r *http.Request, server server.PGElasticServer) (interface{}, error) {
+func PutTypeMapping(endpoint string, r *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := putTypeMappingPattern.ReplaceAllString(endpoint, "${index}")
 	typeName := putTypeMappingPattern.ReplaceAllString(endpoint, "${type}")
 	optionsBytes, err := io.ReadAll(r.Body)
@@ -59,15 +62,15 @@ func PutTypeMapping(endpoint string, r *http.Request, server server.PGElasticSer
 	}
 	options := string(optionsBytes)
 
-	typeObject, err := server.GetDBClient().GetType(indexName, typeName)
+	typeObject, err := srv.GetDBClient().GetType(indexName, typeName)
 	if err != nil {
 		return nil, err
 	}
 
 	if typeObject != nil {
-		_, err = server.GetDBClient().UpdateTypeOptions(indexName, typeName, options)
+		_, err = srv.GetDBClient().UpdateTypeOptions(indexName, typeName, options)
 	} else {
-		_, err = server.GetDBClient().CreateType(indexName, typeName, options)
+		_, err = srv.GetDBClient().CreateType(indexName, typeName, options)
 	}
 
 	if err != nil {

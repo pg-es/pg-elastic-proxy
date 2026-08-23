@@ -7,17 +7,25 @@ type FieldMapping struct {
 }
 
 // GetFieldMapping extracts field mapping from type mapping object
-func GetFieldMapping(mapping map[string]interface{}, fieldName string) (*FieldMapping, bool) {
-	if propertiesRaw, ok := mapping["properties"]; ok {
-		properties := propertiesRaw.(map[string]interface{})
-		if config, ok := properties[fieldName]; ok {
-			configMap := config.(map[string]interface{})
-			var fieldMapping FieldMapping
-			fieldMapping.TypeName, _ = configMap["type"].(string)
-			fieldMapping.Analyzer, _ = configMap["analyzer"].(string)
-			return &fieldMapping, true
-		}
+func GetFieldMapping(mapping map[string]any, fieldName string) (*FieldMapping, bool) {
+	propertiesRaw, ok := mapping["properties"]
+	if !ok {
 		return nil, false
 	}
-	return nil, false
+	properties, ok := propertiesRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	config, ok := properties[fieldName]
+	if !ok {
+		return nil, false
+	}
+	configMap, ok := config.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	var fieldMapping FieldMapping
+	fieldMapping.TypeName, _ = configMap["type"].(string)
+	fieldMapping.Analyzer, _ = configMap["analyzer"].(string)
+	return &fieldMapping, true
 }

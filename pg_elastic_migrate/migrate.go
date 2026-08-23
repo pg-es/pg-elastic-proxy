@@ -6,13 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
+
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/utils"
 	"gopkg.in/olivere/elastic.v5"
-	"log"
 )
 
-func migrateMapping(postgresqlClient *db.Client, indexName string, typeName string, mapping map[string]interface{}) {
+func migrateMapping(postgresqlClient *db.Client, indexName, typeName string, mapping map[string]any) {
 	options, err := json.MarshalIndent(mapping, "", "  ")
 	if err != nil {
 		log.Fatal(err)
@@ -29,9 +30,17 @@ func migrateIndexMappings(elasticClient *elastic.Client, postgresqlClient *db.Cl
 	if err != nil {
 		log.Fatal(err)
 	}
-	for key, mapping := range mappings[indexName].(map[string]interface{})["mappings"].(map[string]interface{}) {
-		processedMapping := map[string]interface{}{
-			"mappings": map[string]interface{}{
+	indexData, ok := mappings[indexName].(map[string]any)
+	if !ok {
+		log.Fatalf("unexpected mapping format for index %s", indexName)
+	}
+	mappingsData, ok := indexData["mappings"].(map[string]any)
+	if !ok {
+		log.Fatalf("unexpected mappings format for index %s", indexName)
+	}
+	for key, mapping := range mappingsData {
+		processedMapping := map[string]any{
+			"mappings": map[string]any{
 				key: mapping,
 			},
 		}
@@ -66,7 +75,7 @@ func main() {
 	elasticsearchHost := flag.String("elasticsearch-host", "localhost:9200", "Host and port of source ElasticSearch instance")
 	flag.Parse()
 
-	elasticURL := fmt.Sprintf("http://%s", *elasticsearchHost)
+	elasticURL := "http://" + *elasticsearchHost
 
 	elasticClient, err := elastic.NewClient(elastic.SetURL(elasticURL))
 	if err != nil {
