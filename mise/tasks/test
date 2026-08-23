@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Run tests with race detection"
+set -euo pipefail
+exec go test -race -v ./cmd/... ./internal/...
