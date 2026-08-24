@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Stop PostgreSQL container (preserves data volume)"
+set -euo pipefail
+
+echo "Stopping PostgreSQL..."
+docker compose stop postgres
+docker compose rm -f postgres
+echo "PostgreSQL stopped."

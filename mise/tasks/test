@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #MISE description="Run tests with race detection"
 #MISE sources=["**/*.go", "go.mod", "go.sum"]
-#MISE depends=["build"]
+#MISE depends=["build", "postgres:start"]
 set -euo pipefail
 exec go test -race -v ./...

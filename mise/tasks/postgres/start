@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#MISE description="Start PostgreSQL via Docker Compose (idempotent)"
+set -euo pipefail
+
+container="pg-es-postgres"
+
+# Already healthy — nothing to do
+if [ "$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; then
+  echo "PostgreSQL is already running and healthy."
+  exit 0
+fi
+
+echo "Starting PostgreSQL..."
+docker compose up -d postgres
+
+# Poll for healthy status (~30s: 15 iterations × 2s)
+timeout=30
+elapsed=0
+while [ "$elapsed" -lt "$timeout" ]; do
+  if [ "$(docker inspect -f '{{.State.Health.Status}}' "$container" 2>/dev/null)" = "healthy" ]; then
+    echo "PostgreSQL is healthy."
+    exit 0
+  fi
+  sleep 2
+  elapsed=$((elapsed + 2))
+done
+
+echo "ERROR: PostgreSQL did not become healthy within ${timeout}s" >&2
+exit 1
