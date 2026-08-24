@@ -96,7 +96,7 @@ jobs:
       - name: Start pg-es-proxy
         run: |
           ./pg-es-proxy &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://localhost:9200/ && break
             sleep 1
           done
@@ -122,11 +122,13 @@ jobs:
         if: always()
         run: |
           SUMMARY=$(cat /tmp/compat-pass-rate.txt)
-          echo "## ES Compatibility (${{ matrix.backend }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Backend | Pass Rate |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---------|-----------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ${{ matrix.backend }} | $SUMMARY |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## ES Compatibility (${{ matrix.backend }})"
+            echo ""
+            echo "| Backend | Pass Rate |"
+            echo "|---------|-----------|"
+            echo "| ${{ matrix.backend }} | $SUMMARY |"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Find base ref run
         id: find-base-run
         if: always() && github.event_name == 'pull_request'
