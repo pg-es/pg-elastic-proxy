@@ -22,9 +22,13 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 15, 16, 17, 18]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ""
@@ -68,8 +72,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - backend: postgres
+          - backend: postgres-14
+            image: postgres:14
+          - backend: postgres-15
+            image: postgres:15
+          - backend: postgres-16
             image: postgres:16
+          - backend: postgres-17
+            image: postgres:17
+          - backend: postgres-18
+            image: postgres:18
           - backend: paradedb
             image: paradedb/paradedb:latest
     services:
