@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Run ES compat test suite against a running pg-es-proxy"
+set -euo pipefail
+
+# Check proxy is running
+status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9200/ || true)
+if [ "$status" != "200" ]; then
+  echo "pg-es-proxy is not running on localhost:9200"
+  echo "Start it with: go run ./cmd/pg-es-proxy"
+  exit 1
+fi
+
+# Check testdata is populated
+if [ ! -d "test/compat/testdata" ] || [ -z "$(ls -A test/compat/testdata 2>/dev/null)" ]; then
+  echo "testdata submodule not initialized"
+  echo "Run: git submodule update --init test/compat/testdata"
+  exit 1
+fi
+
+go test ./test/compat/... -tags compat -race -v -count=1

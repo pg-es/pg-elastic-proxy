@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Update elasticsearch-clients-tests submodule to latest upstream"
+set -euo pipefail
+
+git submodule update --remote test/compat/testdata
+git -C test/compat/testdata rev-parse HEAD
