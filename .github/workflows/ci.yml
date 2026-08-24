@@ -64,7 +64,7 @@ jobs:
   # compat failures never block merges. Pass rate increases as plans implement features.
   # To update the skiplist, edit test/compat/skiplist.yaml in the implementing plan's PR.
   compat:
-    name: ES Compatibility (${{ matrix.backend }})
+    name: ES Compatibility (${{ matrix.backend }} / ES ${{ matrix.es_version }})
     runs-on: ubuntu-latest
     needs: [test]
     continue-on-error: true
@@ -74,8 +74,20 @@ jobs:
         include:
           - backend: postgres-18
             image: postgres:18
+            es_version: "8.19"
+            es_branch: "8.19"
+          - backend: postgres-18
+            image: postgres:18
+            es_version: "9.x"
+            es_branch: "main"
           - backend: paradedb-18
             image: paradedb/paradedb:latest
+            es_version: "8.19"
+            es_branch: "8.19"
+          - backend: paradedb-18
+            image: paradedb/paradedb:latest
+            es_version: "9.x"
+            es_branch: "main"
     services:
       postgres:
         image: ${{ matrix.image }}
@@ -96,6 +108,10 @@ jobs:
         with:
           submodules: true
       - uses: jdx/mise-action@v2
+      - name: Checkout ES version
+        run: |
+          git -C test/compat/testdata fetch origin
+          git -C test/compat/testdata checkout ${{ matrix.es_branch }}
       - name: Start pg-es-proxy
         run: |
           mise run dev &
@@ -118,7 +134,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compat-pass-rate-${{ matrix.backend }}
+          name: compat-pass-rate-${{ matrix.backend }}-es${{ matrix.es_version }}
           path: /tmp/compat-pass-rate.txt
           overwrite: true
       - name: Post pass-rate summary
@@ -126,11 +142,11 @@ jobs:
         run: |
           SUMMARY=$(cat /tmp/compat-pass-rate.txt)
           {
-            echo "## ES Compatibility (${{ matrix.backend }})"
+            echo "## ES Compatibility (${{ matrix.backend }} / ES ${{ matrix.es_version }})"
             echo ""
-            echo "| Backend | Pass Rate |"
-            echo "|---------|-----------|"
-            echo "| ${{ matrix.backend }} | $SUMMARY |"
+            echo "| Backend | ES Version | Pass Rate |"
+            echo "|---------|------------|-----------|"
+            echo "| ${{ matrix.backend }} | ${{ matrix.es_version }} | $SUMMARY |"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Find base ref run
         id: find-base-run
@@ -149,7 +165,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: compat-pass-rate-${{ matrix.backend }}
+          name: compat-pass-rate-${{ matrix.backend }}-es${{ matrix.es_version }}
           run-id: ${{ steps.find-base-run.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: /tmp/base-rate
@@ -171,12 +187,12 @@ jobs:
               diff=$((current_pct - base_pct))
               sign="+"
               [ "$diff" -lt 0 ] && sign=""
-              BODY="**ES Compat [${{ matrix.backend }}]**: ${sign}${diff}% vs \`${{ github.base_ref }}\` (${base_pct}% → ${current_pct}%, ${CURRENT} passed)"
+              BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${sign}${diff}% vs \`${{ github.base_ref }}\` (${base_pct}% → ${current_pct}%, ${CURRENT} passed)"
             else
-              BODY="**ES Compat [${{ matrix.backend }}]**: ${CURRENT} passed (no base rate for comparison)"
+              BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${CURRENT} passed (no base rate for comparison)"
             fi
           else
-            BODY="**ES Compat [${{ matrix.backend }}]**: ${CURRENT} passed (no base ref data)"
+            BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${CURRENT} passed (no base ref data)"
           fi
           gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
         env:
