@@ -1,0 +1,45 @@
+name: start-compose-stack
+description: A wrapper around Docker Compose to start a provided stack
+inputs:
+  services:
+    description: |
+      The services to start in the compose file.
+
+      To start a select list of services, provide a space-separated list of service names (e.g. `service1 service2`)
+      Leave empty to start all services
+    default: ''
+    required: false
+  compose-file:
+    description: 'The path to the compose file to start'
+    default: 'docker-compose.yml'
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Start compose
+      uses: ./.github/actions/with-post-step
+      env:
+        COMPOSE_FILE: ${{ inputs.compose-file }}
+      with:
+        key: compose-up
+        shell: bash
+        main: |
+          docker compose --progress=plain up --wait ${{ inputs.services }}
+
+          echo "container_data=$(
+            docker compose --progress=plain ps --format json ${{ inputs.services }} |
+              jq -cs '
+                map({(.Service): {id: .ID, name: .Name}}) |
+                add
+              '
+          )" >> $GITHUB_OUTPUT
+        post: |
+          echo "::group::Stopping"
+          docker compose stop
+          echo "::endgroup::"
+
+          while read -r service; do
+            echo "::group::Logs for $service"
+            docker compose logs --no-log-prefix --timestamps --no-color "$service"
+            echo "::endgroup::"
+          done < <(docker compose --progress=plain ps -a --format '{{.Service}}' ${{ inputs.services }})
