@@ -26,25 +26,21 @@ jobs:
       fail-fast: false
       matrix:
         pg: [18]
-    services:
-      postgres:
-        image: postgres:${{ matrix.pg }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ""
-          POSTGRES_DB: testdb
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d testdb"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+      - name: Start postgres
+        env:
+          POSTGRES_IMAGE: postgres:${{ matrix.pg }}
+        run: docker compose --progress=plain up --wait postgres
       - run: mise run test
+      - name: Stop postgres and dump logs
+        if: always()
+        run: |
+          echo "::group::Logs for postgres"
+          docker compose logs --no-log-prefix --timestamps --no-color postgres
+          echo "::endgroup::"
+          docker compose stop postgres
 
   lint:
     runs-on: ubuntu-latest
@@ -88,26 +84,15 @@ jobs:
             image: paradedb/paradedb:latest
             es_version: "9.x"
             es_branch: "main"
-    services:
-      postgres:
-        image: ${{ matrix.image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ""
-          POSTGRES_DB: testdb
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d testdb"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - uses: jdx/mise-action@v2
+      - name: Start postgres
+        env:
+          POSTGRES_IMAGE: ${{ matrix.image }}
+        run: docker compose --progress=plain up --wait postgres
       - name: Checkout ES version
         run: |
           git -C test/compat/testdata fetch origin
@@ -197,3 +182,10 @@ jobs:
           gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Stop postgres and dump logs
+        if: always()
+        run: |
+          echo "::group::Logs for postgres"
+          docker compose logs --no-log-prefix --timestamps --no-color postgres
+          echo "::endgroup::"
+          docker compose stop postgres
