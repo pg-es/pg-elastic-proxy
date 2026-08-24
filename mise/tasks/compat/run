@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 #MISE description="Run ES compat test suite against a running pg-es-proxy"
+#MISE sources=["test/compat/**/*.go", "test/compat/testdata/**", "test/compat/skiplist.yaml"]
+#MISE depends=["build"]
 set -euo pipefail
 
 # Check proxy is running
