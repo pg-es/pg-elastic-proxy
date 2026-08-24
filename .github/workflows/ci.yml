@@ -22,6 +22,21 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ""
+          POSTGRES_DB: testdb
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d testdb"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
@@ -62,40 +77,24 @@ jobs:
         image: ${{ matrix.image }}
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: pgestest
+          POSTGRES_PASSWORD: ""
+          POSTGRES_DB: testdb
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
+          --health-cmd "pg_isready -U postgres -d testdb"
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - uses: jdx/mise-action@v2
-      - name: Write config
-        run: |
-          cat > pg_elastic_config.json << 'EOF'
-          {
-            "ServerPort": 9200,
-            "PostgresConfig": {
-              "ServerAddress": "localhost:5432",
-              "User": "postgres",
-              "Password": "postgres",
-              "DBName": "pgestest"
-            }
-          }
-          EOF
-      - name: Build pg-es-proxy
-        env:
-          CGO_ENABLED: "1"
-        run: go build -o pg-es-proxy ./cmd/pg-es-proxy/
       - name: Start pg-es-proxy
         run: |
-          ./pg-es-proxy &
+          mise run dev &
           for _ in $(seq 1 30); do
             curl -sf http://localhost:9200/ && break
             sleep 1
