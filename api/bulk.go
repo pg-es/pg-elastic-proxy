@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -41,7 +42,7 @@ func BulkHandler(r *http.Request, srv server.PGElasticServer) (response any, err
 	str := string(body)
 	bulkCommands := strings.Split(str, "\n")
 
-	return ProcessBulkQuery(bulkCommands, srv)
+	return ProcessBulkQuery(r.Context(), bulkCommands, srv)
 }
 
 type bulkDescriptor struct {
@@ -73,43 +74,45 @@ func parseBulkDescriptor(val any) (*bulkDescriptor, error) {
 	return desc, nil
 }
 
-func resolveAndUpsertDocument(dbClient *db.Client, desc *bulkDescriptor, document string) (*db.ElasticSearchDocument, error) {
-	typeNames, err := dbClient.FindTypes(desc.indexName, desc.typeName)
+func resolveAndUpsertDocument(
+	ctx context.Context, dbClient *db.Client, desc *bulkDescriptor, document string,
+) (*db.ElasticSearchDocument, error) {
+	typeNames, err := dbClient.FindTypes(ctx, desc.indexName, desc.typeName)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(typeNames) > 0 {
-		existingDoc, err := dbClient.GetDocument(desc.indexName, desc.typeName, desc.id)
+		existingDoc, err := dbClient.GetDocument(ctx, desc.indexName, desc.typeName, desc.id)
 		if err != nil {
 			return nil, err
 		}
 
 		if existingDoc != nil {
-			return dbClient.UpdateDocument(desc.indexName, desc.typeName, document, desc.id)
+			return dbClient.UpdateDocument(ctx, desc.indexName, desc.typeName, document, desc.id)
 		}
 	}
 
-	return dbClient.CreateDocument(desc.indexName, desc.typeName, document, desc.id)
+	return dbClient.CreateDocument(ctx, desc.indexName, desc.typeName, document, desc.id)
 }
 
 func executeBulkCommand(
-	action string, desc *bulkDescriptor, nextCommand string, srv server.PGElasticServer,
+	ctx context.Context, action string, desc *bulkDescriptor, nextCommand string, srv server.PGElasticServer,
 ) (*db.ElasticSearchDocument, bool, error) {
 	dbClient := srv.GetDBClient()
 
 	switch action {
 	case "index":
-		doc, err := resolveAndUpsertDocument(dbClient, desc, nextCommand)
+		doc, err := resolveAndUpsertDocument(ctx, dbClient, desc, nextCommand)
 		return doc, true, err
 	case "create":
-		doc, err := dbClient.CreateDocument(desc.indexName, desc.typeName, nextCommand, desc.id)
+		doc, err := dbClient.CreateDocument(ctx, desc.indexName, desc.typeName, nextCommand, desc.id)
 		return doc, true, err
 	case "update":
-		doc, err := dbClient.UpdateDocument(desc.indexName, desc.typeName, nextCommand, desc.id)
+		doc, err := dbClient.UpdateDocument(ctx, desc.indexName, desc.typeName, nextCommand, desc.id)
 		return doc, true, err
 	case "delete":
-		doc, err := dbClient.DeleteDocument(desc.indexName, desc.typeName, desc.id)
+		doc, err := dbClient.DeleteDocument(ctx, desc.indexName, desc.typeName, desc.id)
 		return doc, false, err
 	default:
 		return nil, false, nil
@@ -188,7 +191,7 @@ func buildBulkItemResponse(
 }
 
 // ProcessBulkQuery processes a bulk query.
-func ProcessBulkQuery(rawQuery []string, srv server.PGElasticServer) (any, error) {
+func ProcessBulkQuery(ctx context.Context, rawQuery []string, srv server.PGElasticServer) (any, error) {
 	response := bulkResponse{}
 	skip := false
 	startTime := time.Now()
@@ -217,7 +220,7 @@ func ProcessBulkQuery(rawQuery []string, srv server.PGElasticServer) (any, error
 				nextCommand = rawQuery[idx+1]
 			}
 
-			doc, shouldSkip, err := executeBulkCommand(action, desc, nextCommand, srv)
+			doc, shouldSkip, err := executeBulkCommand(ctx, action, desc, nextCommand, srv)
 			skip = shouldSkip
 
 			item, hasError, fatalErr := buildBulkItemResponse(action, doc, desc.indexName, desc.typeName, err)

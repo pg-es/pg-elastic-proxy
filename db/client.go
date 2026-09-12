@@ -1,22 +1,26 @@
+// Package db provides PostgreSQL-backed storage for indices, types, and
+// documents exposed through the Elasticsearch-compatible API.
 package db
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
-	"github.com/go-pg/pg"
-	"github.com/go-pg/pg/orm"
+	"github.com/huandu/go-sqlbuilder"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/pg-es/pg-es-proxy/internal/pg"
 	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 // Client is a database client connection.
 type Client struct {
-	connection *pg.DB
+	pool *pgxpool.Pool
 }
-
-// Query is alias for orm.Query type.
-// Used to implement other packages of the project without linking it to pg/orm.
-type Query = orm.Query
 
 // IndexRecord contains information about index stored in database.
 type IndexRecord struct {
@@ -42,25 +46,22 @@ type ElasticSearchDocument struct {
  * General Client API
  */
 
-// CreateClient creates an instance of Client with specified parameters.
-// Doesn't check connection to DB server.
-func CreateClient(config utils.PostgresConnectionConfig) (result *Client) {
-	result = new(Client)
-	result.connection = pg.Connect(&pg.Options{
-		User:     config.User,
-		Addr:     config.ServerAddress,
-		Password: config.Password,
-		Database: config.DBName,
-	})
+// NewClient creates an instance of Client backed by the given connection pool.
+// Doesn't check connection to the DB server.
+func NewClient(pool *pgxpool.Pool) *Client {
+	return &Client{pool: pool}
+}
 
-	return result
+// Close closes the underlying connection pool.
+func (dbc *Client) Close() {
+	dbc.pool.Close()
 }
 
 // InitializeSchema initializes system tables used by pg_elastic.
 // Doesn't affect existing tables.
-func (dbc *Client) InitializeSchema() error {
-	for _, model := range []any{&IndexRecord{}, &TypeRecord{}} {
-		err := dbc.connection.CreateTable(model, &orm.CreateTableOptions{IfNotExists: true})
+func (dbc *Client) InitializeSchema(ctx context.Context) error {
+	for _, createSQL := range buildSystemTableDDL() {
+		_, err := dbc.pool.Exec(ctx, createSQL)
 		if err != nil {
 			return fmt.Errorf("creating table: %w", err)
 		}
@@ -69,18 +70,45 @@ func (dbc *Client) InitializeSchema() error {
 	return nil
 }
 
-// NewQuery creates Query instance for specified index and type.
-func (dbc *Client) NewQuery(indexName, typeName string) *Query {
-	tableName := fmt.Sprintf("%s_%s", indexName, typeName)
+// buildSystemTableDDL returns the CREATE TABLE statements for the system
+// tables. Column names and types mirror what the previous ORM generated
+// before the pgx migration: snake_case column names and text columns for
+// string struct fields.
+func buildSystemTableDDL() []string {
+	indexRecords := sqlbuilder.PostgreSQL.NewCreateTableBuilder()
+	indexRecords.CreateTable(`"index_records"`).IfNotExists()
+	indexRecords.Define(`"name" text`)
+	indexRecords.Define(`"options" text`)
+	indexRecords.Define(`PRIMARY KEY ("name")`)
 
-	return dbc.connection.Model().Table(tableName)
+	typeRecords := sqlbuilder.PostgreSQL.NewCreateTableBuilder()
+	typeRecords.CreateTable(`"type_records"`).IfNotExists()
+	typeRecords.Define(`"name" text`)
+	typeRecords.Define(`"index_name" text`)
+	typeRecords.Define(`"options" text`)
+	typeRecords.Define(`PRIMARY KEY ("name", "index_name")`)
+
+	return []string{indexRecords.String(), typeRecords.String()}
 }
 
 // ProcessSearchQuery does a processing of ElasticSearch-format query.
-func (dbc *Client) ProcessSearchQuery(_, _ string, query *Query) ([]ElasticSearchDocument, error) {
-	var documentObject []ElasticSearchDocument
+//
+// tableName is the combined "<index>_<type>" document table name; it is
+// validated as a single SQL identifier before use. whereExpr is a
+// go-sqlbuilder format expression: "$?" placeholders reference the values in
+// args in order (e.g. "document @> $? AND version > $?"). A literal "$" must
+// be written as "$$" inside whereExpr.
+func (dbc *Client) ProcessSearchQuery(ctx context.Context, tableName, whereExpr string, args []any) ([]ElasticSearchDocument, error) {
+	table, err := quotedTableName(tableName)
+	if err != nil {
+		return nil, err
+	}
 
-	count, err := query.Count()
+	countSQL, countArgs := buildSearchCount(table, whereExpr, args)
+
+	var count int
+
+	err = dbc.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&count)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
@@ -89,12 +117,61 @@ func (dbc *Client) ProcessSearchQuery(_, _ string, query *Query) ([]ElasticSearc
 		return nil, nil
 	}
 
-	err = query.Select(&documentObject)
+	selectSQL, selectArgs := buildSearchSelect(table, whereExpr, args)
+
+	rows, err := dbc.pool.Query(ctx, selectSQL, selectArgs...)
+	if err != nil {
+		return nil, utils.NewDBQueryError(err.Error())
+	}
+	defer rows.Close()
+
+	documents := make([]ElasticSearchDocument, 0, count)
+
+	for rows.Next() {
+		var document ElasticSearchDocument
+
+		err = rows.Scan(&document.ID, &document.Document, &document.Version)
+		if err != nil {
+			return nil, utils.NewDBQueryError(err.Error())
+		}
+
+		documents = append(documents, document)
+	}
+
+	err = rows.Err()
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return documentObject, nil
+	return documents, nil
+}
+
+// buildSearchCount builds the COUNT query for a search.
+func buildSearchCount(table, whereExpr string, args []any) (sql string, sqlArgs []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("COUNT(*)").From(table)
+
+	if whereExpr != "" {
+		sb.Where(sb.Var(sqlbuilder.Build(whereExpr, args...)))
+	}
+
+	sql, sqlArgs = sb.Build()
+
+	return sql, sqlArgs
+}
+
+// buildSearchSelect builds the SELECT query for a search.
+func buildSearchSelect(table, whereExpr string, args []any) (sql string, sqlArgs []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("id", "document", "version").From(table)
+
+	if whereExpr != "" {
+		sb.Where(sb.Var(sqlbuilder.Build(whereExpr, args...)))
+	}
+
+	sql, sqlArgs = sb.Build()
+
+	return sql, sqlArgs
 }
 
 /*
@@ -102,51 +179,41 @@ func (dbc *Client) ProcessSearchQuery(_, _ string, query *Query) ([]ElasticSearc
  */
 
 // CreateIndex creates an index record with specified options.
-func (dbc *Client) CreateIndex(indexName, options string) (*IndexRecord, error) {
-	var indexRecord IndexRecord
+func (dbc *Client) CreateIndex(ctx context.Context, indexName, options string) (*IndexRecord, error) {
+	countSQL, countArgs := buildIndexCount(indexName)
 
-	indexSelectQuery := dbc.connection.Model(&IndexRecord{}).Where("Name = ?", indexName)
+	var count int
 
-	count, err := indexSelectQuery.Count()
+	err := dbc.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&count)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	if count == 0 {
-		indexRecord = IndexRecord{Name: indexName, Options: options}
-
-		err = dbc.connection.Insert(&indexRecord)
-		if err != nil {
-			return nil, utils.NewDBQueryError(err.Error())
-		}
-	} else {
+	if count > 0 {
 		return nil, utils.NewResourceAlreadyExistsError("Index already exists")
 	}
 
-	err = indexSelectQuery.Select(&indexRecord)
+	insertSQL, insertArgs := buildIndexInsert(indexName, options)
+
+	_, err = dbc.pool.Exec(ctx, insertSQL, insertArgs...)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return &indexRecord, nil
+	return dbc.GetIndex(ctx, indexName)
 }
 
 // GetIndex gets an instance of existing index.
-func (dbc *Client) GetIndex(indexName string) (*IndexRecord, error) {
+func (dbc *Client) GetIndex(ctx context.Context, indexName string) (*IndexRecord, error) {
+	selectSQL, selectArgs := buildIndexSelect(indexName)
+
 	var indexRecord IndexRecord
 
-	indexSelectQuery := dbc.connection.Model(&IndexRecord{}).Where("Name = ?", indexName)
-
-	count, err := indexSelectQuery.Count()
-	if err != nil {
-		return nil, utils.NewDBQueryError(err.Error())
-	}
-
-	if count == 0 {
+	err := dbc.pool.QueryRow(ctx, selectSQL, selectArgs...).Scan(&indexRecord.Name, &indexRecord.Options)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 
-	err = indexSelectQuery.Select(&indexRecord)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
@@ -155,25 +222,54 @@ func (dbc *Client) GetIndex(indexName string) (*IndexRecord, error) {
 }
 
 // FindIndices searches for indices using name pattern in ElasticSearch wildcard format.
-func (dbc *Client) FindIndices(indexPattern string) ([]string, error) {
-	var records []IndexRecord
-
+func (dbc *Client) FindIndices(ctx context.Context, indexPattern string) ([]string, error) {
 	indexPattern = strings.ReplaceAll(indexPattern, "?", "_")
 	indexPattern = strings.ReplaceAll(indexPattern, "*", "%")
 
-	query := dbc.connection.Model(&IndexRecord{}).Where("name LIKE ?", indexPattern)
+	selectSQL, selectArgs := buildIndexNamesLike(indexPattern)
 
-	err := query.Select(&records)
-	if err != nil {
-		return nil, fmt.Errorf("selecting indices: %w", err)
-	}
+	return dbc.selectNames(ctx, selectSQL, selectArgs, "selecting indices")
+}
 
-	results := make([]string, 0, len(records))
-	for _, v := range records {
-		results = append(results, v.Name)
-	}
+// buildIndexCount builds the existence-count query for an index.
+func buildIndexCount(indexName string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("COUNT(*)").From(`"index_records"`).Where(sb.Equal("name", indexName))
 
-	return results, nil
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildIndexSelect builds the SELECT query for a single index.
+func buildIndexSelect(indexName string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("name", "options").From(`"index_records"`).Where(sb.Equal("name", indexName))
+
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildIndexInsert builds the INSERT statement for a new index.
+func buildIndexInsert(indexName, options string) (sql string, args []any) {
+	ib := sqlbuilder.PostgreSQL.NewInsertBuilder()
+	ib.InsertInto(`"index_records"`).Cols("name", "options").Values(indexName, options)
+
+	sql, args = ib.Build()
+
+	return sql, args
+}
+
+// buildIndexNamesLike builds the SELECT query for indices matching a
+// SQL LIKE pattern.
+func buildIndexNamesLike(pattern string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("name").From(`"index_records"`).Where(sb.Like("name", pattern))
+
+	sql, args = sb.Build()
+
+	return sql, args
 }
 
 /*
@@ -181,51 +277,46 @@ func (dbc *Client) FindIndices(indexPattern string) ([]string, error) {
  */
 
 // CreateType creates a type record with specified options.
-func (dbc *Client) CreateType(indexName, typeName, options string) (*TypeRecord, error) {
-	var typeRecord TypeRecord
+func (dbc *Client) CreateType(ctx context.Context, indexName, typeName, options string) (*TypeRecord, error) {
+	countSQL, countArgs := buildTypeCount(indexName, typeName)
 
-	typeSelectQuery := dbc.connection.Model(&TypeRecord{}).Where("Name = ?", typeName).Where("Index_Name = ?", indexName)
+	var count int
 
-	count, err := typeSelectQuery.Count()
+	err := dbc.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&count)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	if count == 0 {
-		typeRecord = TypeRecord{Name: typeName, IndexName: indexName, Options: options}
-
-		err = dbc.connection.Insert(&typeRecord)
-		if err != nil {
-			return nil, utils.NewDBQueryError(err.Error())
-		}
-
-		err = dbc.createDataTable(indexName, typeName)
-		if err != nil {
-			return nil, utils.NewDBQueryError(err.Error())
-		}
-	} else {
+	if count > 0 {
 		return nil, utils.NewResourceAlreadyExistsError("Type already exists")
 	}
 
-	return &typeRecord, nil
-}
+	insertSQL, insertArgs := buildTypeInsert(indexName, typeName, options)
 
-// GetType gets an instance of existing type.
-func (dbc *Client) GetType(indexName, typeName string) (*TypeRecord, error) {
-	var typeRecord TypeRecord
-
-	typeSelectQuery := dbc.connection.Model(&TypeRecord{}).Where("Name = ?", typeName).Where("Index_Name = ?", indexName)
-
-	count, err := typeSelectQuery.Count()
+	_, err = dbc.pool.Exec(ctx, insertSQL, insertArgs...)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	if count == 0 {
+	err = dbc.createDataTable(ctx, indexName, typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TypeRecord{Name: typeName, IndexName: indexName, Options: options}, nil
+}
+
+// GetType gets an instance of existing type.
+func (dbc *Client) GetType(ctx context.Context, indexName, typeName string) (*TypeRecord, error) {
+	selectSQL, selectArgs := buildTypeSelect(indexName, typeName)
+
+	var typeRecord TypeRecord
+
+	err := dbc.pool.QueryRow(ctx, selectSQL, selectArgs...).Scan(&typeRecord.Name, &typeRecord.IndexName, &typeRecord.Options)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 
-	err = typeSelectQuery.Select(&typeRecord)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
@@ -234,35 +325,80 @@ func (dbc *Client) GetType(indexName, typeName string) (*TypeRecord, error) {
 }
 
 // UpdateTypeOptions updates options for existing type.
-func (dbc *Client) UpdateTypeOptions(indexName, typeName, options string) (*TypeRecord, error) {
-	_, err := dbc.connection.Model(&TypeRecord{}).Where("Name = ?", typeName).Where("Index_Name = ?", indexName).Set("options = ?", options).Update()
+func (dbc *Client) UpdateTypeOptions(ctx context.Context, indexName, typeName, options string) (*TypeRecord, error) {
+	updateSQL, updateArgs := buildTypeOptionsUpdate(indexName, typeName, options)
+
+	_, err := dbc.pool.Exec(ctx, updateSQL, updateArgs...)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return dbc.GetType(indexName, typeName)
+	return dbc.GetType(ctx, indexName, typeName)
 }
 
 // FindTypes searches for types using name pattern in ElasticSearch wildcard format.
-func (dbc *Client) FindTypes(index, typePattern string) ([]string, error) {
-	var records []TypeRecord
-
+func (dbc *Client) FindTypes(ctx context.Context, indexName, typePattern string) ([]string, error) {
 	typePattern = strings.ReplaceAll(typePattern, "?", "_")
 	typePattern = strings.ReplaceAll(typePattern, "*", "%")
 
-	query := dbc.connection.Model(&TypeRecord{}).Where("name LIKE ?", typePattern).Where("index_name = ?", index)
+	selectSQL, selectArgs := buildTypeNamesLike(indexName, typePattern)
 
-	err := query.Select(&records)
-	if err != nil {
-		return nil, fmt.Errorf("selecting types: %w", err)
-	}
+	return dbc.selectNames(ctx, selectSQL, selectArgs, "selecting types")
+}
 
-	results := make([]string, 0, len(records))
-	for _, v := range records {
-		results = append(results, v.Name)
-	}
+// buildTypeCount builds the existence-count query for a type.
+func buildTypeCount(indexName, typeName string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("COUNT(*)").From(`"type_records"`)
+	sb.Where(sb.Equal("name", typeName), sb.Equal("index_name", indexName))
 
-	return results, nil
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildTypeSelect builds the SELECT query for a single type.
+func buildTypeSelect(indexName, typeName string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("name", "index_name", "options").From(`"type_records"`)
+	sb.Where(sb.Equal("name", typeName), sb.Equal("index_name", indexName))
+
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildTypeInsert builds the INSERT statement for a new type.
+func buildTypeInsert(indexName, typeName, options string) (sql string, args []any) {
+	ib := sqlbuilder.PostgreSQL.NewInsertBuilder()
+	ib.InsertInto(`"type_records"`).Cols("name", "index_name", "options").Values(typeName, indexName, options)
+
+	sql, args = ib.Build()
+
+	return sql, args
+}
+
+// buildTypeOptionsUpdate builds the UPDATE statement for type options.
+func buildTypeOptionsUpdate(indexName, typeName, options string) (sql string, args []any) {
+	ub := sqlbuilder.PostgreSQL.NewUpdateBuilder()
+	ub.Update(`"type_records"`).Set(ub.Assign("options", options))
+	ub.Where(ub.Equal("name", typeName), ub.Equal("index_name", indexName))
+
+	sql, args = ub.Build()
+
+	return sql, args
+}
+
+// buildTypeNamesLike builds the SELECT query for types matching a SQL LIKE
+// pattern within an index.
+func buildTypeNamesLike(indexName, pattern string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("name").From(`"type_records"`)
+	sb.Where(sb.Like("name", pattern), sb.Equal("index_name", indexName))
+
+	sql, args = sb.Build()
+
+	return sql, args
 }
 
 /*
@@ -270,83 +406,86 @@ func (dbc *Client) FindTypes(index, typePattern string) ([]string, error) {
  */
 
 // CreateDocument creates a new document in database.
-func (dbc *Client) CreateDocument(indexName, typeName, document, documentID string) (result *ElasticSearchDocument, err error) {
-	index, err := dbc.GetIndex(indexName)
+func (dbc *Client) CreateDocument(ctx context.Context, indexName, typeName, document, documentID string) (*ElasticSearchDocument, error) {
+	index, err := dbc.GetIndex(ctx, indexName)
 	if err != nil {
 		return nil, err
-	} else if index == nil {
-		_, err = dbc.CreateIndex(indexName, "")
+	}
+
+	if index == nil {
+		_, err = dbc.CreateIndex(ctx, indexName, "")
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	typeObject, err := dbc.GetType(indexName, typeName)
+	typeObject, err := dbc.GetType(ctx, indexName, typeName)
 	if err != nil {
 		return nil, err
-	} else if typeObject == nil {
-		_, err = dbc.CreateType(indexName, typeName, "")
+	}
+
+	if typeObject == nil {
+		_, err = dbc.CreateType(ctx, indexName, typeName, "")
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if documentID == "" {
-		result, err = dbc.insertDocument(indexName, typeName, document)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		var documentExist bool
-
-		documentExist, err = dbc.IsDocumentExists(indexName, typeName, documentID)
-		if err != nil {
-			return nil, err
-		}
-
-		if documentExist {
-			return nil, utils.NewVersionConflictError(fmt.Sprintf("Document with ID %s already exists", documentID))
-		}
-
-		result, err = dbc.insertDocumentID(indexName, typeName, document, documentID)
+		return dbc.insertDocument(ctx, indexName, typeName, document)
 	}
 
-	return result, err
+	documentExist, err := dbc.IsDocumentExists(ctx, indexName, typeName, documentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if documentExist {
+		return nil, utils.NewVersionConflictError(fmt.Sprintf("Document with ID %s already exists", documentID))
+	}
+
+	return dbc.insertDocumentID(ctx, indexName, typeName, document, documentID)
 }
 
 // GetDocument gets document specified by index, type, and ID.
-func (dbc *Client) GetDocument(indexName, typeName, documentID string) (*ElasticSearchDocument, error) {
-	var documentObject ElasticSearchDocument
-
-	tableName := fmt.Sprintf("%s_%s", indexName, typeName)
-	query := dbc.connection.Model().TableExpr(tableName).Where("id = ?", documentID)
-
-	count, err := query.Count()
+func (dbc *Client) GetDocument(ctx context.Context, indexName, typeName, documentID string) (*ElasticSearchDocument, error) {
+	table, err := documentTableName(indexName, typeName)
 	if err != nil {
-		return nil, utils.NewDBQueryError(err.Error())
+		return nil, err
 	}
 
-	if count == 0 {
+	selectSQL, selectArgs := buildDocumentSelect(table, documentID)
+
+	var document ElasticSearchDocument
+
+	err = dbc.pool.QueryRow(ctx, selectSQL, selectArgs...).Scan(&document.ID, &document.Document, &document.Version)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 
-	err = query.Select(&documentObject)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return &documentObject, nil
+	return &document, nil
 }
 
 // IsDocumentExists checks for document existence in database.
-func (dbc *Client) IsDocumentExists(indexName, typeName, documentID string) (bool, error) {
+func (dbc *Client) IsDocumentExists(ctx context.Context, indexName, typeName, documentID string) (bool, error) {
 	if documentID == "" {
 		return false, nil
 	}
 
-	tableName := fmt.Sprintf("%s_%s", indexName, typeName)
+	table, err := documentTableName(indexName, typeName)
+	if err != nil {
+		return false, err
+	}
 
-	count, err := dbc.connection.Model().TableExpr(tableName).Where("id = ?", documentID).Count()
+	countSQL, countArgs := buildDocumentCount(table, documentID)
+
+	var count int
+
+	err = dbc.pool.QueryRow(ctx, countSQL, countArgs...).Scan(&count)
 	if err != nil {
 		return false, utils.NewDBQueryError(err.Error())
 	}
@@ -355,69 +494,194 @@ func (dbc *Client) IsDocumentExists(indexName, typeName, documentID string) (boo
 }
 
 // UpdateDocument updates existing document in database.
-func (dbc *Client) UpdateDocument(indexName, typeName, document, documentID string) (result *ElasticSearchDocument, err error) {
-	documentExist, err := dbc.IsDocumentExists(indexName, typeName, documentID)
+func (dbc *Client) UpdateDocument(ctx context.Context, indexName, typeName, document, documentID string) (*ElasticSearchDocument, error) {
+	documentExist, err := dbc.IsDocumentExists(ctx, indexName, typeName, documentID)
 	if err != nil {
 		return nil, err
 	}
 
-	if documentID != "" && documentExist {
-		tableName := fmt.Sprintf("%s_%s", indexName, typeName)
-
-		_, err := dbc.connection.Model().TableExpr(tableName).Set("document = ?", document).Set("version = version + 1").Where("id = ?", documentID).Update()
-		if err != nil {
-			return nil, utils.NewDBQueryError(err.Error())
-		}
-
-		result, err = dbc.GetDocument(indexName, typeName, documentID)
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	if documentID == "" || !documentExist {
 		return nil, utils.NewDBQueryError(fmt.Sprintf("Document with ID %s doesn't exists", documentID))
 	}
 
-	return result, nil
-}
-
-// DeleteDocument deletes existing document in database.
-func (dbc *Client) DeleteDocument(indexName, typeName, documentID string) (*ElasticSearchDocument, error) {
-	documentObject, err := dbc.GetDocument(indexName, typeName, documentID)
+	table, err := documentTableName(indexName, typeName)
 	if err != nil {
 		return nil, err
 	}
 
-	if documentObject != nil {
-		tableName := fmt.Sprintf("%s_%s", indexName, typeName)
+	updateSQL, updateArgs := buildDocumentUpdate(table, document, documentID)
 
-		_, err := dbc.connection.Model().TableExpr(tableName).Where("id = ?", documentID).Delete()
-		if err != nil {
-			return nil, utils.NewDBQueryError(err.Error())
-		}
+	_, err = dbc.pool.Exec(ctx, updateSQL, updateArgs...)
+	if err != nil {
+		return nil, utils.NewDBQueryError(err.Error())
+	}
+
+	return dbc.GetDocument(ctx, indexName, typeName, documentID)
+}
+
+// DeleteDocument deletes existing document in database.
+func (dbc *Client) DeleteDocument(ctx context.Context, indexName, typeName, documentID string) (*ElasticSearchDocument, error) {
+	documentObject, err := dbc.GetDocument(ctx, indexName, typeName, documentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if documentObject == nil {
+		return nil, nil
+	}
+
+	table, err := documentTableName(indexName, typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	deleteSQL, deleteArgs := buildDocumentDelete(table, documentID)
+
+	_, err = dbc.pool.Exec(ctx, deleteSQL, deleteArgs...)
+	if err != nil {
+		return nil, utils.NewDBQueryError(err.Error())
 	}
 
 	return documentObject, nil
+}
+
+// buildDocumentCount builds the existence-count query for a document.
+func buildDocumentCount(table, documentID string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("COUNT(*)").From(table).Where(sb.Equal("id", documentID))
+
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildDocumentSelect builds the SELECT query for a single document.
+func buildDocumentSelect(table, documentID string) (sql string, args []any) {
+	sb := sqlbuilder.PostgreSQL.NewSelectBuilder()
+	sb.Select("id", "document", "version").From(table).Where(sb.Equal("id", documentID))
+
+	sql, args = sb.Build()
+
+	return sql, args
+}
+
+// buildDocumentInsert builds the INSERT statement for a document with a
+// sequence-generated ID.
+func buildDocumentInsert(table, document string) (sql string, args []any) {
+	ib := sqlbuilder.PostgreSQL.NewInsertBuilder()
+	ib.InsertInto(table).Cols("id", "document", "version")
+	ib.Values(sqlbuilder.Raw("DEFAULT"), document, 1).Returning("id")
+
+	sql, args = ib.Build()
+
+	return sql, args
+}
+
+// buildDocumentInsertWithID builds the INSERT statement for a document with
+// an explicit ID.
+func buildDocumentInsertWithID(table, document, documentID string) (sql string, args []any) {
+	ib := sqlbuilder.PostgreSQL.NewInsertBuilder()
+	ib.InsertInto(table).Cols("id", "document", "version").Values(documentID, document, 1)
+
+	sql, args = ib.Build()
+
+	return sql, args
+}
+
+// buildDocumentUpdate builds the UPDATE statement for a document.
+func buildDocumentUpdate(table, document, documentID string) (sql string, args []any) {
+	ub := sqlbuilder.PostgreSQL.NewUpdateBuilder()
+	ub.Update(table).Set(ub.Assign("document", document), "version = version + 1")
+	ub.Where(ub.Equal("id", documentID))
+
+	sql, args = ub.Build()
+
+	return sql, args
+}
+
+// buildDocumentDelete builds the DELETE statement for a document.
+func buildDocumentDelete(table, documentID string) (sql string, args []any) {
+	db := sqlbuilder.PostgreSQL.NewDeleteBuilder()
+	db.DeleteFrom(table).Where(db.Equal("id", documentID))
+
+	sql, args = db.Build()
+
+	return sql, args
 }
 
 /*
  * Documents processing helpers/internal methods
  */
 
-// createDataTable creates a document storage table for specified index and type.
-func (dbc *Client) createDataTable(indexName, typeName string) error {
-	queryString := fmt.Sprintf("CREATE SEQUENCE %s_%s_id_seq;", indexName, typeName)
+// selectNames runs a single-column SELECT and returns all values as strings.
+func (dbc *Client) selectNames(ctx context.Context, sql string, args []any, operation string) ([]string, error) {
+	rows, err := dbc.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", operation, err)
+	}
+	defer rows.Close()
 
-	_, err := dbc.connection.Exec(queryString)
+	names := make([]string, 0)
+
+	for rows.Next() {
+		var name string
+
+		err = rows.Scan(&name)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", operation, err)
+		}
+
+		names = append(names, name)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", operation, err)
+	}
+
+	return names, nil
+}
+
+// documentTableName validates the index and type names and returns the
+// quoted name of the table storing their documents.
+func documentTableName(indexName, typeName string) (string, error) {
+	err := pg.ValidateIndexName(indexName)
+	if err != nil {
+		return "", utils.NewIllegalQueryError("invalid index name " + strconv.Quote(indexName))
+	}
+
+	err = pg.ValidateIdentifier(typeName)
+	if err != nil {
+		return "", utils.NewIllegalQueryError("invalid type name " + strconv.Quote(typeName))
+	}
+
+	return sqlbuilder.PostgreSQL.Quote(indexName + "_" + typeName), nil
+}
+
+// quotedTableName validates a combined "<index>_<type>" table name and
+// returns it quoted for use in a query.
+func quotedTableName(tableName string) (string, error) {
+	err := pg.ValidateIdentifier(tableName)
+	if err != nil {
+		return "", utils.NewIllegalQueryError("invalid table name " + strconv.Quote(tableName))
+	}
+
+	return sqlbuilder.PostgreSQL.Quote(tableName), nil
+}
+
+// createDataTable creates a document storage table for specified index and type.
+func (dbc *Client) createDataTable(ctx context.Context, indexName, typeName string) error {
+	createSequenceSQL, createTableSQL, err := buildDataTableDDL(indexName, typeName)
+	if err != nil {
+		return err
+	}
+
+	_, err = dbc.pool.Exec(ctx, createSequenceSQL)
 	if err != nil {
 		return utils.NewDBQueryError(err.Error())
 	}
 
-	queryString = fmt.Sprintf(
-		"CREATE TABLE %s_%s(id VARCHAR(128) PRIMARY KEY DEFAULT nextval('%s_%s_id_seq'), document JSONB NOT NULL, version integer);",
-		indexName, typeName, indexName, typeName,
-	)
-
-	_, err = dbc.connection.Exec(queryString)
+	_, err = dbc.pool.Exec(ctx, createTableSQL)
 	if err != nil {
 		return utils.NewDBQueryError(err.Error())
 	}
@@ -425,36 +689,70 @@ func (dbc *Client) createDataTable(indexName, typeName string) error {
 	return nil
 }
 
-// insertDocument inserts a new document with default ID.
-func (dbc *Client) insertDocument(indexName, typeName, document string) (*ElasticSearchDocument, error) {
-	documentObject := &ElasticSearchDocument{Document: document, Version: 1}
+// buildDataTableDDL returns the CREATE SEQUENCE and CREATE TABLE statements
+// for the document storage table of an index/type pair.
+//
+// DDL identifiers cannot be passed as query parameters, so this is the only
+// place in the package where identifiers are formatted directly into a SQL
+// string: the index name is validated with pg.ValidateIndexName and the type
+// and sequence names with pg.ValidateIdentifier, then all are quoted with
+// sqlbuilder.PostgreSQL.Quote first (see plan 05-pg-es-db-modernize, Task 2).
+func buildDataTableDDL(indexName, typeName string) (createSequenceSQL, createTableSQL string, err error) {
+	table, err := documentTableName(indexName, typeName)
+	if err != nil {
+		return "", "", err
+	}
 
-	queryString := fmt.Sprintf(
-		"INSERT INTO %s_%s (id, document, version) VALUES(DEFAULT, '%s', %d) RETURNING id;",
-		indexName, typeName, document, 1,
+	sequenceName := indexName + "_" + typeName + "_id_seq"
+
+	err = pg.ValidateIdentifier(sequenceName)
+	if err != nil {
+		return "", "", err
+	}
+
+	quotedSequence := sqlbuilder.PostgreSQL.Quote(sequenceName)
+
+	createSequenceSQL = "CREATE SEQUENCE " + quotedSequence
+	createTableSQL = fmt.Sprintf(
+		"CREATE TABLE %s(id VARCHAR(128) PRIMARY KEY DEFAULT nextval('%s'), document JSONB NOT NULL, version integer)",
+		table, quotedSequence,
 	)
 
-	_, err := dbc.connection.Query(documentObject, queryString)
+	return createSequenceSQL, createTableSQL, nil
+}
+
+// insertDocument inserts a new document with default ID.
+func (dbc *Client) insertDocument(ctx context.Context, indexName, typeName, document string) (*ElasticSearchDocument, error) {
+	table, err := documentTableName(indexName, typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	insertSQL, insertArgs := buildDocumentInsert(table, document)
+
+	var documentID string
+
+	err = dbc.pool.QueryRow(ctx, insertSQL, insertArgs...).Scan(&documentID)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return documentObject, nil
+	return &ElasticSearchDocument{ID: documentID, Document: document, Version: 1}, nil
 }
 
 // insertDocumentID inserts a new document with specified ID.
-func (dbc *Client) insertDocumentID(indexName, typeName, document, documentID string) (*ElasticSearchDocument, error) {
-	documentObject := &ElasticSearchDocument{documentID, document, 1}
+func (dbc *Client) insertDocumentID(ctx context.Context, indexName, typeName, document, documentID string) (*ElasticSearchDocument, error) {
+	table, err := documentTableName(indexName, typeName)
+	if err != nil {
+		return nil, err
+	}
 
-	queryString := fmt.Sprintf(
-		"INSERT INTO %s_%s (id, document, version) VALUES(%s, '%s', %d);",
-		indexName, typeName, documentID, document, 1,
-	)
+	insertSQL, insertArgs := buildDocumentInsertWithID(table, document, documentID)
 
-	_, err := dbc.connection.Exec(queryString)
+	_, err = dbc.pool.Exec(ctx, insertSQL, insertArgs...)
 	if err != nil {
 		return nil, utils.NewDBQueryError(err.Error())
 	}
 
-	return documentObject, nil
+	return &ElasticSearchDocument{ID: documentID, Document: document, Version: 1}, nil
 }
