@@ -1,22 +1,45 @@
 #!/usr/bin/env bash
-#MISE description="Run ES compat test suite against a running pg-es-proxy"
-#MISE sources=["test/compat/**/*.go", "test/compat/testdata/**", "test/compat/skiplist.yaml"]
-#MISE depends=["build"]
+#MISE description="Run ES compat tests against a dedicated pg-es-proxy instance"
+#MISE depends=["build", "postgres:start"]
 set -euo pipefail
 
-# Check proxy is running
-status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9200/ || true)
-if [ "$status" != "200" ]; then
-  echo "pg-es-proxy is not running on localhost:9200"
-  echo "Start it with: go run ./cmd/pg-es-proxy"
-  exit 1
-fi
+port="${COMPAT_PORT:-9201}"
+database="${COMPAT_DB:-pg_es_compat}"
+container="pg-es-postgres"
+base_url="http://localhost:${port}"
 
-# Check testdata is populated
 if [ ! -d "test/compat/testdata" ] || [ -z "$(ls -A test/compat/testdata 2>/dev/null)" ]; then
   echo "testdata submodule not initialized"
   echo "Run: git submodule update --init test/compat/testdata"
   exit 1
 fi
 
-go test ./test/compat/... -tags compat -race -v -count=1
+# Own database: the suite creates and deletes indices, so keep it off dev data.
+if ! docker exec "$container" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${database}'" | grep -q 1; then
+  docker exec "$container" createdb -U postgres "${database}"
+fi
+
+# Own port: leave any `mise run dev` instance on 9200 alone.
+PGESPROXY_SERVER_PORT="${port}" PGESPROXY_DB_NAME="${database}" ./pg-es-proxy &
+proxy_pid=$!
+trap 'kill "${proxy_pid}" 2>/dev/null || true' EXIT
+
+for _ in $(seq 1 30); do
+  if curl -sf "${base_url}/_cluster/health" >/dev/null 2>&1; then
+    break
+  fi
+
+  if ! kill -0 "${proxy_pid}" 2>/dev/null; then
+    echo "pg-es-proxy exited during startup" >&2
+    exit 1
+  fi
+
+  sleep 1
+done
+
+if ! curl -sf "${base_url}/_cluster/health" >/dev/null 2>&1; then
+  echo "pg-es-proxy did not become healthy at ${base_url} within 30s" >&2
+  exit 1
+fi
+
+COMPAT_BASE_URL="${base_url}" go test ./test/compat/... -tags compat -race -v -count=1

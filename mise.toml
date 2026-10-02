@@ -1,10 +1,10 @@
 [env]
 # Local development defaults — override in mise.local.toml for personal settings
-PG_ES_SERVER_PORT = "9200"
-PG_ES_DB_HOST = "localhost"
-PG_ES_DB_PORT = "5432"
-PG_ES_DB_USER = "postgres"
-PG_ES_DB_NAME = "testdb"
+PGESPROXY_SERVER_HOST = "localhost"
+PGESPROXY_SERVER_PORT = "9200"
+PGESPROXY_DB_HOST = "localhost:5432"
+PGESPROXY_DB_USER = "postgres"
+PGESPROXY_DB_NAME = "testdb"
 
 [tools]
 go = "1.27.0"

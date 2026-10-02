@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -23,6 +25,13 @@ func TestCompat(t *testing.T) {
 
 	executor := compat.NewExecutor(baseURL, http.DefaultClient)
 
+	flavour := os.Getenv("COMPAT_FLAVOUR")
+	if flavour == "" {
+		flavour = "es9"
+	}
+
+	target := compat.Target{Flavour: flavour, Version: os.Getenv("COMPAT_ES_VERSION")}
+
 	skiplist, err := compat.LoadSkiplist("skiplist.yaml")
 	if err != nil {
 		t.Logf("skiplist not found, running all tests: %v", err)
@@ -30,24 +39,27 @@ func TestCompat(t *testing.T) {
 		skiplist = compat.Skiplist{}
 	}
 
-	entries, err := os.ReadDir("testdata")
-	require.NoError(t, err)
+	var filePaths []string
 
-	var total, passed, failed, skipped int
+	for _, pattern := range []string{"testdata/tests/*.yml", "testdata/tests/*/*.yml"} {
+		matches, err := filepath.Glob(pattern)
+		require.NoError(t, err)
 
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
-			continue
-		}
+		filePaths = append(filePaths, matches...)
+	}
 
+	sort.Strings(filePaths)
+
+	var total, passed, failed, skipped, errored int
+
+	for _, filePath := range filePaths {
 		total++
-
-		filePath := "testdata/" + entry.Name()
 
 		fileHandle, err := os.Open(filePath)
 		if err != nil {
-			t.Logf("skip %s: open error: %v", entry.Name(), err)
-			skipped++
+			t.Errorf("open %s: %v", filePath, err)
+
+			errored++
 
 			continue
 		}
@@ -56,21 +68,37 @@ func TestCompat(t *testing.T) {
 		fileHandle.Close()
 
 		if parseErr != nil {
-			t.Logf("skip %s: parse error: %v", entry.Name(), parseErr)
+			t.Errorf("parse %s: %v", filePath, parseErr)
+
+			errored++
+
+			continue
+		}
+
+		relPath := strings.TrimPrefix(filePath, "testdata/")
+
+		if skip, reason := skiplist.ShouldSkip(relPath); skip {
+			t.Logf("skip %s: %s", filePath, reason)
 			skipped++
 
 			continue
 		}
 
-		result := compat.RunFile(context.Background(), testFile, skiplist, executor)
+		if !target.SatisfiesRequires(&testFile.Requires) {
+			skipped++
+
+			continue
+		}
+
+		result := compat.RunFile(context.Background(), &testFile, executor, target)
 		passed += result.Passed
 		failed += result.Failed
 		skipped += result.Skipped
 
 		for _, failure := range result.Failures {
-			t.Logf("FAIL %s / %s[%d]: %s", entry.Name(), failure.TestName, failure.StepIndex, failure.Err)
+			t.Logf("FAIL %s / %s[%d]: %s", filePath, failure.TestName, failure.StepIndex, failure.Err)
 		}
 	}
 
-	t.Logf("compat: total=%d passed=%d failed=%d skipped=%d", total, passed, failed, skipped)
+	t.Logf("compat: total=%d passed=%d failed=%d skipped=%d errored=%d", total, passed, failed, skipped, errored)
 }

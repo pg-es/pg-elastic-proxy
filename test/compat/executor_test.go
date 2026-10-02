@@ -13,23 +13,39 @@ import (
 )
 
 const (
-	paramIndex      = "index"
-	paramID         = "id"
-	assertMatch     = "match"
-	assertIsTrue    = "is_true"
-	assertIsFalse   = "is_false"
-	assertLength    = "length"
-	assertGTE       = "gte"
-	assertLTE       = "lte"
-	actionGet       = "get"
-	actionSearch    = "search"
-	actionIdxCreate = "indices.create"
-	actionIdxDelete = "indices.delete"
+	fieldCount        = "count"
+	fieldOther        = "other"
+	fieldModules      = "modules"
+	fieldName         = "name"
+	fieldFound        = "found"
+	fieldID           = "_id"
+	fieldNumber       = "number"
+	fieldVersion      = "version"
+	versionNumber     = "8.0"
+	entSearchModule   = "x-pack-ent-search"
+	catchIllegalArg   = "/illegal_argument_exception/"
+	testMsg           = "msg"
+	testDocID         = "abc123"
+	testStashID       = "$id"
+	testLogsIndex     = "logs"
+	testIdxIndex      = "idx"
+	testFlavour       = "es9"
+	testNodeSelector  = "node_selector"
+	testAuthHeader    = "Authorization"
+	testCreated       = "created"
+	testRatio         = "ratio"
+	testErrField      = "error"
+	testTags          = "tags"
+	testHits          = "hits"
+	testValue         = "value"
+	testBodyStash     = "$body"
+	testUnknownAction = "nonexistent.action"
 )
 
 type capturedRequest struct {
 	method      string
 	path        string
+	query       string
 	body        []byte
 	contentType string
 }
@@ -42,6 +58,7 @@ func newTestServer(tb testing.TB, response map[string]any) (*httptest.Server, *c
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.method = r.Method
 		captured.path = r.URL.Path
+		captured.query = r.URL.RawQuery
 		captured.contentType = r.Header.Get("Content-Type")
 
 		reqBody, readErr := io.ReadAll(r.Body)
@@ -72,22 +89,22 @@ func newTestServer(tb testing.TB, response map[string]any) (*httptest.Server, *c
 func TestExecutorIndex(t *testing.T) {
 	t.Parallel()
 
-	srv, captured := newTestServer(t, map[string]any{"result": "created"})
+	srv, captured := newTestServer(t, map[string]any{"result": testCreated})
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name: "index",
+		Name: compat.ActionIndex,
 		Params: map[string]any{
-			paramIndex: "myindex",
-			paramID:    "doc1",
-			"body":     map[string]any{"subject": "hello"},
+			compat.ParamIndex: "myindex",
+			compat.ParamID:    "doc1",
+			compat.ParamBody:  map[string]any{"subject": "hello"},
 		},
 	}
 
-	_, status, err := executor.Execute(t.Context(), action)
+	resp, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, http.StatusOK, resp.Status)
 	assert.Equal(t, http.MethodPut, captured.method)
 	assert.Equal(t, "/myindex/_doc/doc1", captured.path)
 	assert.Equal(t, "application/json", captured.contentType)
@@ -100,16 +117,19 @@ func TestExecutorGet(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   actionGet,
-		Params: map[string]any{paramIndex: "products", paramID: "item1"},
+		Name:   compat.ActionGet,
+		Params: map[string]any{compat.ParamIndex: "products", compat.ParamID: "item1"},
 	}
 
-	resp, _, err := executor.Execute(t.Context(), action)
+	resp, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodGet, captured.method)
 	assert.Equal(t, "/products/_doc/item1", captured.path)
-	assert.Equal(t, "item1", resp["_ref"])
+
+	body, ok := resp.Body.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "item1", body["_ref"])
 }
 
 func TestExecutorDelete(t *testing.T) {
@@ -119,11 +139,11 @@ func TestExecutorDelete(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   "delete",
-		Params: map[string]any{paramIndex: "logs", paramID: "entry5"},
+		Name:   compat.ActionDelete,
+		Params: map[string]any{compat.ParamIndex: testLogsIndex, compat.ParamID: "entry5"},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodDelete, captured.method)
@@ -137,14 +157,14 @@ func TestExecutorSearch(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   actionSearch,
-		Params: map[string]any{paramIndex: "events"},
+		Name:   compat.ActionSearch,
+		Params: map[string]any{compat.ParamIndex: "events"},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
-	assert.Equal(t, http.MethodPost, captured.method)
+	assert.Equal(t, http.MethodGet, captured.method)
 	assert.Equal(t, "/events/_search", captured.path)
 }
 
@@ -155,11 +175,11 @@ func TestExecutorSearchNoIndex(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   actionSearch,
+		Name:   compat.ActionSearch,
 		Params: map[string]any{},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, "/_search", captured.path)
@@ -172,11 +192,11 @@ func TestExecutorIndicesCreate(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   actionIdxCreate,
-		Params: map[string]any{paramIndex: "fresh-index"},
+		Name:   compat.ActionIndicesCreate,
+		Params: map[string]any{compat.ParamIndex: "fresh-index"},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPut, captured.method)
@@ -190,11 +210,11 @@ func TestExecutorIndicesDelete(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   actionIdxDelete,
-		Params: map[string]any{paramIndex: "stale-index"},
+		Name:   compat.ActionIndicesDelete,
+		Params: map[string]any{compat.ParamIndex: "stale-index"},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodDelete, captured.method)
@@ -208,17 +228,17 @@ func TestExecutorIndicesExists(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name:   "indices.exists",
-		Params: map[string]any{paramIndex: "check-index"},
+		Name:   compat.ActionIndicesExists,
+		Params: map[string]any{compat.ParamIndex: "check-index"},
 	}
 
-	result, status, err := executor.Execute(t.Context(), action)
+	result, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodHead, captured.method)
 	assert.Equal(t, "/check-index", captured.path)
-	assert.Equal(t, http.StatusOK, status)
-	assert.Empty(t, result)
+	assert.Equal(t, http.StatusOK, result.Status)
+	assert.Empty(t, result.Body)
 }
 
 func TestExecutorBulk(t *testing.T) {
@@ -228,22 +248,153 @@ func TestExecutorBulk(t *testing.T) {
 	executor := compat.NewExecutor(srv.URL, srv.Client())
 
 	action := compat.DoAction{
-		Name: "bulk",
+		Name: compat.ActionBulk,
 		Params: map[string]any{
-			"body": []any{
-				map[string]any{"index": map[string]any{"_index": "bulkidx"}},
+			compat.ParamBody: []any{
+				map[string]any{compat.ParamIndex: map[string]any{"_index": "bulkidx"}},
 				map[string]any{"heading": "bulk document"},
 			},
 		},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPost, captured.method)
 	assert.Equal(t, "/_bulk", captured.path)
 	assert.Equal(t, "application/x-ndjson", captured.contentType)
 	assert.NotEmpty(t, captured.body)
+}
+
+func TestExecutorQueryParams(t *testing.T) {
+	t.Parallel()
+
+	srv, captured := newTestServer(t, map[string]any{"status": "yellow"})
+	executor := compat.NewExecutor(srv.URL, srv.Client())
+
+	action := compat.DoAction{
+		Name:   "cluster.health",
+		Params: map[string]any{"level": "shards", "wait_for_status": "green"},
+	}
+
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodGet, captured.method)
+	assert.Equal(t, "/_cluster/health", captured.path)
+	assert.Contains(t, captured.query, "level=shards")
+	assert.Contains(t, captured.query, "wait_for_status=green")
+}
+
+func TestExecutorPathVariantSelection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		action     compat.DoAction
+		wantMethod string
+		wantPath   string
+	}{
+		{
+			name:       "count without index",
+			action:     compat.DoAction{Name: "count", Params: map[string]any{}},
+			wantMethod: http.MethodPost,
+			wantPath:   "/_count",
+		},
+		{
+			name:       "count with index",
+			action:     compat.DoAction{Name: "count", Params: map[string]any{compat.ParamIndex: testLogsIndex}},
+			wantMethod: http.MethodPost,
+			wantPath:   "/logs/_count",
+		},
+		{
+			name:       "index without id",
+			action:     compat.DoAction{Name: compat.ActionIndex, Params: map[string]any{compat.ParamIndex: testLogsIndex}},
+			wantMethod: http.MethodPost,
+			wantPath:   "/logs/_doc",
+		},
+		{
+			name:       "index with id",
+			action:     compat.DoAction{Name: compat.ActionIndex, Params: map[string]any{compat.ParamIndex: testLogsIndex, compat.ParamID: "1"}},
+			wantMethod: http.MethodPut,
+			wantPath:   "/logs/_doc/1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, captured := newTestServer(t, map[string]any{"ok": true})
+			executor := compat.NewExecutor(srv.URL, srv.Client())
+
+			_, err := executor.Execute(t.Context(), &tt.action, testFlavour)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMethod, captured.method)
+			assert.Equal(t, tt.wantPath, captured.path)
+		})
+	}
+}
+
+func TestExecutorHeaders(t *testing.T) {
+	t.Parallel()
+
+	var got string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(testAuthHeader)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	executor := compat.NewExecutor(srv.URL, srv.Client())
+
+	_, err := executor.Execute(t.Context(), &compat.DoAction{
+		Name:    compat.ActionGet,
+		Params:  map[string]any{compat.ParamIndex: "i", compat.ParamID: "1"},
+		Headers: map[string]string{testAuthHeader: "Basic xyz"},
+	}, testFlavour)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Basic xyz", got)
+}
+
+func TestExecutorStringBodySentVerbatim(t *testing.T) {
+	t.Parallel()
+
+	srv, captured := newTestServer(t, map[string]any{"ok": true})
+	executor := compat.NewExecutor(srv.URL, srv.Client())
+
+	raw := "{\n  \"query\": { \"match_all\": {} }\n}"
+
+	_, err := executor.Execute(t.Context(), &compat.DoAction{
+		Name:   compat.ActionSearch,
+		Params: map[string]any{compat.ParamIndex: "i", compat.ParamBody: raw},
+	}, testFlavour)
+
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(captured.body))
+}
+
+func TestExecutorBulkStringBodyVerbatim(t *testing.T) {
+	t.Parallel()
+
+	srv, captured := newTestServer(t, map[string]any{"ok": true})
+	executor := compat.NewExecutor(srv.URL, srv.Client())
+
+	raw := "{\"index\":{\"_index\":\"i\"}}\n{\"a\":1}\n"
+
+	_, err := executor.Execute(t.Context(), &compat.DoAction{
+		Name:   compat.ActionBulk,
+		Params: map[string]any{compat.ParamBody: raw},
+	}, testFlavour)
+
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(captured.body))
+	assert.Equal(t, "application/x-ndjson", captured.contentType)
 }
 
 func TestExecutorUnknownAction(t *testing.T) {
@@ -257,7 +408,7 @@ func TestExecutorUnknownAction(t *testing.T) {
 		Params: map[string]any{},
 	}
 
-	_, _, err := executor.Execute(t.Context(), action)
+	_, err := executor.Execute(t.Context(), &action, testFlavour)
 
 	require.ErrorIs(t, err, compat.ErrSkip)
 }
