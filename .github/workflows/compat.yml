@@ -21,18 +21,22 @@ jobs:
             image: postgres:18
             es_version: "8.19"
             es_branch: "8.19"
+            es_flavour: es8
           - backend: postgres-18
             image: postgres:18
             es_version: "9.x"
             es_branch: "main"
+            es_flavour: es9
           - backend: paradedb-18
             image: paradedb/paradedb:latest
             es_version: "8.19"
             es_branch: "8.19"
+            es_flavour: es8
           - backend: paradedb-18
             image: paradedb/paradedb:latest
             es_version: "9.x"
             es_branch: "main"
+            es_flavour: es9
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,14 +62,17 @@ jobs:
       - name: Run ES compat tests
         id: compat
         shell: bash
+        env:
+          COMPAT_FLAVOUR: ${{ matrix.es_flavour }}
         run: |
           set -o pipefail
           mise run compat:run | tee /tmp/compat-output.txt
       - name: Extract pass rate
         if: always()
         run: |
-          grep -oP 'COMPAT: \K\d+/\d+' /tmp/compat-output.txt \
-            > /tmp/compat-pass-rate.txt || echo "0/0" > /tmp/compat-pass-rate.txt
+          total=$(grep -oP 'compat: total=\K\d+' /tmp/compat-output.txt || echo 0)
+          passed=$(grep -oP 'compat: total=\d+ passed=\K\d+' /tmp/compat-output.txt || echo 0)
+          echo "${passed}/${total}" > /tmp/compat-pass-rate.txt
       - name: Upload pass rate artifact
         if: always()
         uses: actions/upload-artifact@v4
