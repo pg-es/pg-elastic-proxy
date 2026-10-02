@@ -13,6 +13,10 @@ jobs:
     name: ES Compatibility (${{ matrix.backend }} / ES ${{ matrix.es_version }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -50,8 +54,8 @@ jobs:
           services: postgres
       - name: Checkout ES version
         run: |
-          git -C test/compat/testdata fetch origin
-          git -C test/compat/testdata checkout ${{ matrix.es_branch }}
+          git -C test/compat/testdata fetch origin ${{ matrix.es_branch }}
+          git -C test/compat/testdata checkout --force FETCH_HEAD
       - name: Start pg-es-proxy
         run: |
           mise run dev &
@@ -95,13 +99,15 @@ jobs:
         id: find-base-run
         if: always() && github.event_name == 'pull_request'
         continue-on-error: true
-        run: |
-          RUN_ID=$(gh api \
-            "/repos/${{ github.repository }}/actions/workflows/compat.yml/runs?branch=${{ github.base_ref }}&per_page=10" \
-            --jq '[.workflow_runs[] | select(.conclusion != null)][0].id // empty')
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.base_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          RUN_ID=$(gh api "/repos/${REPO}/actions/workflows/compat.yml/runs" \
+            -f branch="$BASE_REF" -f event=push -f per_page=10 \
+            --jq '[.workflow_runs[] | select(.conclusion != null)][0].id // empty')
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
       - name: Download base pass rate
         id: base-artifact
         if: always() && github.event_name == 'pull_request' && steps.find-base-run.outputs.run_id != ''
@@ -115,28 +121,35 @@ jobs:
       - name: Post pass-rate diff
         if: always() && github.event_name == 'pull_request'
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          CURRENT=$(cat /tmp/compat-pass-rate.txt)
-          current_passed=$(echo "$CURRENT" | cut -d/ -f1)
-          current_total=$(echo "$CURRENT" | cut -d/ -f2)
+          # The artifact is untrusted: only digits/slash are allowed before it
+          # reaches arithmetic, which would otherwise evaluate embedded commands.
+          CURRENT=$(cat /tmp/compat-pass-rate.txt 2>/dev/null)
+          [[ "$CURRENT" =~ ^[0-9]+/[0-9]+$ ]] || CURRENT="0/0"
+          current_passed=${CURRENT%%/*}
+          current_total=${CURRENT##*/}
           BASE_FILE="/tmp/base-rate/compat-pass-rate.txt"
-          if [ -f "$BASE_FILE" ] && [ "${current_total:-0}" -gt 0 ]; then
-            BASE=$(cat "$BASE_FILE")
-            base_passed=$(echo "$BASE" | cut -d/ -f1)
-            base_total=$(echo "$BASE" | cut -d/ -f2)
-            if [ "${base_total:-0}" -gt 0 ]; then
+          BASE=""
+          [ -f "$BASE_FILE" ] && BASE=$(cat "$BASE_FILE")
+          [[ "$BASE" =~ ^[0-9]+/[0-9]+$ ]] || BASE=""
+          if [ -n "$BASE" ] && [ "$current_total" -gt 0 ]; then
+            base_passed=${BASE%%/*}
+            base_total=${BASE##*/}
+            if [ "$base_total" -gt 0 ]; then
               current_pct=$((current_passed * 100 / current_total))
               base_pct=$((base_passed * 100 / base_total))
               diff=$((current_pct - base_pct))
               sign="+"
               [ "$diff" -lt 0 ] && sign=""
-              BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${sign}${diff}% vs \`${{ github.base_ref }}\` (${base_pct}% → ${current_pct}%, ${CURRENT} passed)"
+              BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${sign}${diff}% vs \`${BASE_REF}\` (${base_pct}% -> ${current_pct}%, ${CURRENT} passed)"
             else
               BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${CURRENT} passed (no base rate for comparison)"
             fi
           else
             BODY="**ES Compat [${{ matrix.backend }} / ES ${{ matrix.es_version }}]**: ${CURRENT} passed (no base ref data)"
           fi
-          gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh pr comment "$PR_NUMBER" --body "$BODY"
