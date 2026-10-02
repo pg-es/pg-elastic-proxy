@@ -1,11 +1,11 @@
-// Command gen reads the Elasticsearch REST API specification and writes
-// action_registry.go: a name-to-route table used by the compat executor.
-//
-// Usage:
+// Command gen reads an Elasticsearch REST API specification and writes a
+// name-to-route registry used by the compat executor. Run it once per ES major:
 //
 //	go run ./test/compat/internal/gen \
-//	    -spec /path/to/elasticsearch/rest-api-spec/src/main/resources/rest-api-spec/api \
-//	    -out test/compat/action_registry.go
+//	    -spec /path/to/elasticsearch-8.19/rest-api-spec/src/main/resources/rest-api-spec/api \
+//	    -name actionRoutesES8 -out test/compat/action_registry_es8.go
+//
+// Prefer `mise run compat:gen`, which regenerates both registries.
 package main
 
 import (
