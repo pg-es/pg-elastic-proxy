@@ -29,7 +29,7 @@ func PutIndexHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
 
 	options := string(optionsBytes)
 
-	_, err = srv.GetDBClient().CreateIndex(indexName, options)
+	_, err = srv.GetDBClient().CreateIndex(r.Context(), indexName, options)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func PutIndexHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
 func HeadIndexHandler(r *http.Request, srv server.PGElasticServer) (any, error) {
 	indexName := r.PathValue("index")
 
-	indexRecord, err := srv.GetDBClient().GetIndex(indexName)
+	indexRecord, err := srv.GetDBClient().GetIndex(r.Context(), indexName)
 	if err != nil {
 		fmt.Println(err)
 		return false, err
@@ -62,15 +62,15 @@ func PutTypeMapping(r *http.Request, srv server.PGElasticServer) (any, error) {
 
 	options := string(optionsBytes)
 
-	typeObject, err := srv.GetDBClient().GetType(indexName, typeName)
+	typeObject, err := srv.GetDBClient().GetType(r.Context(), indexName, typeName)
 	if err != nil {
 		return nil, err
 	}
 
 	if typeObject != nil {
-		_, err = srv.GetDBClient().UpdateTypeOptions(indexName, typeName, options)
+		_, err = srv.GetDBClient().UpdateTypeOptions(r.Context(), indexName, typeName, options)
 	} else {
-		_, err = srv.GetDBClient().CreateType(indexName, typeName, options)
+		_, err = srv.GetDBClient().CreateType(r.Context(), indexName, typeName, options)
 	}
 
 	if err != nil {

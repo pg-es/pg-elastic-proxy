@@ -22,9 +22,19 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [18]
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+      - name: Start postgres
+        uses: ./.github/actions/compose
+        env:
+          POSTGRES_IMAGE: postgres:${{ matrix.pg }}
+        with:
+          services: postgres
       - run: mise run test
 
   lint:

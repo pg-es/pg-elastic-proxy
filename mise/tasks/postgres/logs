@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Tail PostgreSQL container logs"
+set -euo pipefail
+
+exec docker compose logs -f postgres

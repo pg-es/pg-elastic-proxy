@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 #MISE description="Run go vet on all packages"
+#MISE sources=["**/*.go", "go.mod"]
 set -euo pipefail
 exec go vet ./...

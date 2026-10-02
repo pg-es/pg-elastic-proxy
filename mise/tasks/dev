@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Start pg-es-proxy in development mode"
+#MISE depends=["build", "postgres:start"]
+set -euo pipefail
+exec ./pg-es-proxy

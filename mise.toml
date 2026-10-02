@@ -1,3 +1,11 @@
+[env]
+# Local development defaults — override in mise.local.toml for personal settings
+PGESPROXY_SERVER_HOST = "localhost"
+PGESPROXY_SERVER_PORT = "9200"
+PGESPROXY_DB_HOST = "localhost:5432"
+PGESPROXY_DB_USER = "postgres"
+PGESPROXY_DB_NAME = "testdb"
+
 [tools]
 go = "1.27.0"
 "go:golang.org/x/tools/gopls" = "0.23.0"
@@ -5,6 +13,7 @@ go = "1.27.0"
 golangci-lint = "2.13.1"
 prek = "0.3.8"
 goreleaser = "2.16.0"
+actionlint = "1.7.12"
 
 [task_config]
 includes = ["mise/tasks"]

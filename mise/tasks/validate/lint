@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 #MISE description="Run golangci-lint"
+#MISE sources=["**/*.go", ".golangci.yml"]
 set -euo pipefail
 exec golangci-lint run ./...

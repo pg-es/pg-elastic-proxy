@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate the compat action registries, one per ES major"
+set -euo pipefail
+
+if [ -z "${COMPAT_ES_SPEC_ES8:-}" ] || [ -z "${COMPAT_ES_SPEC_ES9:-}" ]; then
+  echo "set COMPAT_ES_SPEC_ES8 and COMPAT_ES_SPEC_ES9 to the Elasticsearch rest-api-spec api/ directories, e.g." >&2
+  echo "  COMPAT_ES_SPEC_ES8=/path/to/elasticsearch-8.19/rest-api-spec/src/main/resources/rest-api-spec/api" >&2
+  echo "  COMPAT_ES_SPEC_ES9=/path/to/elasticsearch-main/rest-api-spec/src/main/resources/rest-api-spec/api" >&2
+  exit 1
+fi
+
+go run ./test/compat/internal/gen -spec "${COMPAT_ES_SPEC_ES8}" -name actionRoutesES8 -out test/compat/action_registry_es8.go
+go run ./test/compat/internal/gen -spec "${COMPAT_ES_SPEC_ES9}" -name actionRoutesES9 -out test/compat/action_registry_es9.go

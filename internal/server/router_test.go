@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,20 +9,15 @@ import (
 
 	"github.com/pg-es/pg-es-proxy/db"
 	"github.com/pg-es/pg-es-proxy/internal/server"
-	"github.com/pg-es/pg-es-proxy/utils"
 )
 
 type mockServer struct{}
-
-func (*mockServer) GetConfiguration() utils.PGElasticConfig {
-	return utils.PGElasticConfig{}
-}
 
 func (*mockServer) GetDBClient() *db.Client {
 	return nil
 }
 
-func (*mockServer) Start() {}
+func (*mockServer) Start(context.Context) error { return nil }
 
 func TestNewRouter(t *testing.T) {
 	t.Parallel()

@@ -20,7 +20,7 @@ Think of it as FerretDB for Elasticsearch.
 │  • Query DSL → PostgreSQL tsvector translation              │
 │  • Bulk, search, index, document CRUD                       │
 └────────────────────┬────────────────────────────────────────┘
-                     │ SQL (go-pg/pg ORM)
+                     │ SQL (pgx v5 + go-sqlbuilder)
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  PostgreSQL (JSONB documents, tsvector indexes)             │
@@ -30,6 +30,8 @@ Think of it as FerretDB for Elasticsearch.
 ## Status
 
 This is an early-stage fork of [asp437/pg_elastic](https://github.com/asp437/pg_elastic). The proxy handles basic Elasticsearch API operations (cluster health, bulk, search, index, document CRUD) but is not feature-complete or production-ready.
+
+See [docs/compatibility.md](docs/compatibility.md) for the exact ES API and query-DSL surface pg_es implements, the known gaps, and the trade-offs of running it instead of a real Elasticsearch cluster.
 
 ## License
 
